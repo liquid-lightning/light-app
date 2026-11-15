@@ -18,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material3.Icon
@@ -39,11 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.noRipple
-import app.light.wallet.ui.copyToClipboard
 import app.light.wallet.ui.sheets.WalletSheet
 import app.light.wallet.ui.theme.MonoFont
 import app.light.wallet.ui.theme.Tokens
-import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsTab(
@@ -52,7 +49,6 @@ fun SettingsTab(
     onWalletWiped: () -> Unit,
 ) {
     val context = LocalContext.current
-    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     var unit by remember { mutableStateOf(repository.displayUnit) }
 
     Column(
@@ -103,28 +99,6 @@ fun SettingsTab(
             ) { onOpenSheet(WalletSheet.Seed) }
             Divider()
             SettingsRow(
-                icon = { Icon(Icons.Outlined.FileDownload, null, tint = Tokens.Accent, modifier = Modifier.size(14.dp)) },
-                title = "Copy client.crt",
-                subtitle = "Greenlight certificate · clipboard",
-            ) {
-                uiScope.launch {
-                    repository.loadDeveloperCertPem()
-                        ?.let { copyToClipboard(context, "client.crt", it, sensitive = true) }
-                }
-            }
-            Divider()
-            SettingsRow(
-                icon = { Icon(Icons.Outlined.FileDownload, null, tint = Tokens.Accent, modifier = Modifier.size(14.dp)) },
-                title = "Copy client-key.pem",
-                subtitle = "Keep this secret",
-            ) {
-                uiScope.launch {
-                    repository.loadDeveloperKeyPem()
-                        ?.let { copyToClipboard(context, "client-key.pem", it, sensitive = true) }
-                }
-            }
-            Divider()
-            SettingsRow(
                 icon = { Icon(Icons.Outlined.OpenInNew, null, tint = Tokens.Accent, modifier = Modifier.size(14.dp)) },
                 title = "Source code",
                 subtitle = "github.com/olegfomenko/light-app",
@@ -161,7 +135,7 @@ fun SettingsTab(
         }
 
         Text(
-            "LightApp 0.1 · Core Lightning · Greenlight",
+            "LightApp 0.1 · Core Lightning · ember",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, fontFamily = MonoFont),
             color = Tokens.Faint,
             modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),

@@ -53,8 +53,6 @@ class SecureStorage(context: Context) {
         const val K_PASSPHRASE = "passphrase"
         const val K_NETWORK = "network"
         const val K_DEVICE_CREDS = "device_creds"
-        const val K_DEV_CERT = "developer_cert"
-        const val K_DEV_KEY = "developer_key"
         const val K_UNIT = "display_unit"
     }
 
@@ -157,14 +155,6 @@ class SecureStorage(context: Context) {
     var deviceCreds: ByteArray?
         get() = getBytes(K_DEVICE_CREDS)
         set(v) = if (v == null) remove(K_DEVICE_CREDS) else putBytes(K_DEVICE_CREDS, v)
-
-    var developerCert: ByteArray?
-        get() = getBytes(K_DEV_CERT)
-        set(v) = if (v == null) remove(K_DEV_CERT) else putBytes(K_DEV_CERT, v)
-
-    var developerKey: ByteArray?
-        get() = getBytes(K_DEV_KEY)
-        set(v) = if (v == null) remove(K_DEV_KEY) else putBytes(K_DEV_KEY, v)
 
     /** "sat" | "msat" | "btc" — a plain preference, deliberately NOT encrypted. */
     var displayUnit: String

@@ -1,8 +1,5 @@
 package app.light.wallet.ui.onboarding
 
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,8 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -57,22 +52,19 @@ import app.light.wallet.ui.theme.MonoFont
 import app.light.wallet.ui.theme.Tokens
 import kotlinx.coroutines.launch
 
-private enum class Step { WELCOME, CREATE, RESTORE, CERTS, REGISTER }
+private enum class Step { WELCOME, CREATE, RESTORE, REGISTER }
 
 @Composable
 fun OnboardingFlow(repository: WalletRepository, onDone: () -> Unit) {
     var step by remember { mutableStateOf(Step.WELCOME) }
     var mnemonic by remember { mutableStateOf("") }
     var isRestore by remember { mutableStateOf(false) }
-    var certBytes by remember { mutableStateOf<ByteArray?>(null) }
-    var keyBytes by remember { mutableStateOf<ByteArray?>(null) }
 
     // System back mirrors the on-screen Back buttons through the flow.
     androidx.activity.compose.BackHandler(enabled = step != Step.WELCOME) {
         step = when (step) {
             Step.CREATE, Step.RESTORE -> Step.WELCOME
-            Step.CERTS -> if (isRestore) Step.RESTORE else Step.CREATE
-            Step.REGISTER -> Step.CERTS
+            Step.REGISTER -> if (isRestore) Step.RESTORE else Step.CREATE
             else -> Step.WELCOME
         }
     }
@@ -101,14 +93,11 @@ fun OnboardingFlow(repository: WalletRepository, onDone: () -> Unit) {
                 },
             )
             Step.CREATE -> CreateWallet(mnemonic,
-                onNext = { step = Step.CERTS }, onBack = { step = Step.WELCOME })
+                onNext = { step = Step.REGISTER }, onBack = { step = Step.WELCOME })
             Step.RESTORE -> RestoreWallet(mnemonic, { mnemonic = it },
-                onNext = { step = Step.CERTS }, onBack = { step = Step.WELCOME })
-            Step.CERTS -> Certificates(certBytes, keyBytes, { certBytes = it }, { keyBytes = it },
-                onNext = { step = Step.REGISTER },
+                onNext = { step = Step.REGISTER }, onBack = { step = Step.WELCOME })
+            Step.REGISTER -> Register(repository, mnemonic, isRestore, onDone,
                 onBack = { step = if (isRestore) Step.RESTORE else Step.CREATE })
-            Step.REGISTER -> Register(repository, mnemonic, certBytes, keyBytes,
-                isRestore, onDone, onBack = { step = Step.CERTS })
         }
     }
 }
@@ -174,7 +163,7 @@ private fun Welcome(onCreate: () -> Unit, onRestore: () -> Unit) {
         Logo()
         Text("LightApp", style = MaterialTheme.typography.headlineSmall.copy(fontSize = 34.sp))
         Text(
-            "A full Core Lightning node in your pocket, powered by Greenlight. Built by Engineers for Engineers.",
+            "A full Core Lightning node in your pocket, powered by ember. Built by Engineers for Engineers.",
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, lineHeight = 23.sp),
             color = Tokens.Label,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -351,110 +340,15 @@ private fun RestoreWallet(
 private fun validateWordPrefix(word: String): Boolean = word.all { it in 'a'..'z' }
 
 @Composable
-private fun Certificates(
-    certBytes: ByteArray?, keyBytes: ByteArray?,
-    onCert: (ByteArray?) -> Unit, onKey: (ByteArray?) -> Unit,
-    onNext: () -> Unit, onBack: () -> Unit,
-) {
-    val context = LocalContext.current
-    fun readUri(uri: Uri?): ByteArray? = uri?.let {
-        runCatching { context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() } }.getOrNull()
-    }
-    val pickCert = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { onCert(readUri(it)) }
-    val pickKey = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { onKey(readUri(it)) }
-
-    Text("Greenlight credentials", style = MaterialTheme.typography.headlineSmall)
-    val glIntro = androidx.compose.ui.text.buildAnnotatedString {
-        append("Upload the developer certificate pair from the ")
-        withStyle(androidx.compose.ui.text.SpanStyle(color = Tokens.Accent, fontWeight = FontWeight.Bold)) {
-            append("Greenlight console")
-        }
-        append(". They authorize this app to register and schedule your node.")
-    }
-    Text(
-        glIntro,
-        style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, lineHeight = 21.sp),
-        color = Tokens.Label,
-        modifier = Modifier
-            .padding(top = 8.dp, bottom = 22.dp)
-            .noRipple {
-                context.startActivity(
-                    android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://greenlight.blockstream.com/"),
-                    ),
-                )
-            },
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        CertCard("client.crt",
-            if (certBytes == null) "Developer certificate · PEM" else "${certBytes.size} bytes loaded",
-            certBytes != null) { pickCert.launch(arrayOf("*/*")) }
-        CertCard("client-key.pem",
-            if (keyBytes == null) "Private key · keep secret" else "${keyBytes.size} bytes loaded",
-            keyBytes != null) { pickKey.launch(arrayOf("*/*")) }
-    }
-    Text(
-        "Certificate and key are stored encrypted in the Android Keystore. The files you picked stay where you chose them — keep them safe.",
-        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 19.sp),
-        color = Tokens.Dim, modifier = Modifier.padding(top = 14.dp),
-    )
-    PillButton(
-        "Continue",
-        modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-        enabled = certBytes != null && keyBytes != null, height = 54,
-    ) { onNext() }
-    GhostButton("Back", modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { onBack() }
-}
-
-@Composable
-private fun CertCard(name: String, sub: String, done: Boolean, onClick: () -> Unit) {
-    // Dashed border per design (Compose has no dashed border modifier; a
-    // PathEffect stroke drawn behind achieves it).
-    val borderColor = if (done) Tokens.Green.copy(alpha = .5f) else Color(0x26FFFFFF)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Tokens.Field, RoundedCornerShape(16.dp))
-            .drawBehind {
-                drawRoundRect(
-                    color = borderColor,
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = 1.dp.toPx(),
-                        pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                            floatArrayOf(10f, 8f),
-                        ),
-                    ),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16.dp.toPx()),
-                )
-            }
-            .noRipple(onClick = onClick)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = MonoFont))
-            Text(sub, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 2.dp))
-        }
-        Text(
-            "✓",
-            style = MaterialTheme.typography.titleSmall,
-            color = if (done) Tokens.Green else Color(0x1AFFFFFF),
-        )
-    }
-}
-
-@Composable
 private fun Register(
     repository: WalletRepository,
     mnemonic: String,
-    certBytes: ByteArray?, keyBytes: ByteArray?, isRestore: Boolean,
+    isRestore: Boolean,
     onDone: () -> Unit, onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var step by remember { mutableStateOf(-1) } // -1 idle, 0..2 stages, 3 done
+    var step by remember { mutableStateOf(-1) } // -1 idle, 0..1 stages, 2 done
     var error by remember { mutableStateOf<String?>(null) }
     val action = if (isRestore) "Recover node" else "Register node"
 
@@ -464,19 +358,18 @@ private fun Register(
     )
     Text(
         if (isRestore)
-            "We'll recover your existing Greenlight node from the seed and issue fresh device credentials for this phone."
+            "We'll recover your existing ember node from the seed and issue a fresh device certificate for this phone."
         else
-            "We'll register a brand-new Core Lightning node for your seed on mainnet. Takes a few seconds.",
+            "We'll register a brand-new Core Lightning node for your seed. Takes a few seconds.",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, lineHeight = 21.sp),
         color = Tokens.Label, modifier = Modifier.padding(top = 8.dp, bottom = 22.dp),
     )
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        RegRow("Loading credentials", "mTLS keypair → keystore", step, 0)
         RegRow(
             if (isRestore) "scheduler.recover(node)" else "scheduler.register(node)",
-            "gl.blckstrm.com:2111", step, 1,
+            "proving seed ownership · signed challenge", step, 0,
         )
-        RegRow("Node scheduled", "signer ready · device credentials stored", step, 2)
+        RegRow("Node ready", "device certificate stored", step, 1)
     }
     error?.let {
         Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 14.dp))
@@ -488,14 +381,13 @@ private fun Register(
         busy = true; error = null; step = 0
         scope.launch {
             try {
-                step = 1
                 repository.setupWallet(
-                    mnemonic = mnemonic.trim(), passphrase = "", network = "bitcoin",
-                    developerCert = certBytes ?: ByteArray(0),
-                    developerKey = keyBytes ?: ByteArray(0),
+                    // LOCAL DEV ONLY: this dev cluster's bitcoind runs regtest, not mainnet.
+                    // Revert to "bitcoin" before shipping.
+                    mnemonic = mnemonic.trim(), passphrase = "", network = "regtest",
                     restore = isRestore,
                 )
-                step = 3
+                step = 2
                 onDone()
             } catch (e: Exception) {
                 error = e.message ?: "registration failed"

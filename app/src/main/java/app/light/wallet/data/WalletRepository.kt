@@ -1,5 +1,6 @@
 package app.light.wallet.data
 
+import app.light.wallet.BuildConfig
 import app.light.wallet.core.CreateInvoiceParams
 import app.light.wallet.core.CreateInvoiceResult
 import app.light.wallet.core.LightNode
@@ -78,9 +79,9 @@ data class ActivePayment(
 )
 
 /**
- * Owns the connection to the Greenlight node and all app-level state.
- * Payments run in the application scope, so the UI stays fully usable
- * while a payment is in flight.
+ * Owns the connection to the ember-provisioned node and all app-level
+ * state. Payments run in the application scope, so the UI stays fully
+ * usable while a payment is in flight.
  */
 class WalletRepository(
     private val storage: SecureStorage,
@@ -232,21 +233,21 @@ class WalletRepository(
     // ------------------------------------------------------------------
 
     /**
-     * Register (or recover, when [restore] is true) the Greenlight node and
-     * persist everything the app needs to reconnect later.
+     * Register (or recover, when [restore] is true) the ember node and
+     * persist everything the app needs to reconnect later. `mnemonic` is
+     * always client-generated/-supplied now (see [generateMnemonic]) — ember
+     * is custodial but never invents the seed itself.
      */
     suspend fun setupWallet(
         mnemonic: String,
         passphrase: String,
         network: String,
-        developerCert: ByteArray,
-        developerKey: ByteArray,
         restore: Boolean,
     ) {
         val creds = if (restore) {
-            recoverNode(mnemonic, passphrase, network, developerCert, developerKey)
+            recoverNode(BuildConfig.EMBER_ADDR, mnemonic, passphrase).deviceCreds
         } else {
-            registerNode(mnemonic, passphrase, network, developerCert, developerKey)
+            registerNode(BuildConfig.EMBER_ADDR, mnemonic, passphrase, network, "").deviceCreds
         }
         // Keystore writes (and, on a fresh install, the StrongBox keygen the
         // first write triggers) must not run on the caller's Main dispatcher.
@@ -255,9 +256,6 @@ class WalletRepository(
             storage.passphrase = passphrase
             storage.network = network
             storage.deviceCreds = creds
-            // Kept for Settings -> export; uploaded once at onboarding.
-            storage.developerCert = developerCert
-            storage.developerKey = developerKey
         }
     }
 
@@ -265,16 +263,6 @@ class WalletRepository(
     suspend fun loadMnemonicWords(): List<String> =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             storage.mnemonic?.trim()?.split(" ").orEmpty()
-        }
-
-    suspend fun loadDeveloperCertPem(): String? =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            storage.developerCert?.decodeToString()
-        }
-
-    suspend fun loadDeveloperKeyPem(): String? =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            storage.developerKey?.decodeToString()
         }
 
     var displayUnit: String
@@ -305,7 +293,7 @@ class WalletRepository(
         migration.join()
         connectMutex.withLock {
             if (!force && (node != null || _connState.value is ConnState.Connecting)) return
-            val mnemonic = storage.mnemonic ?: run {
+            if (storage.mnemonic == null) {
                 _connState.value = ConnState.Failed("wallet not set up")
                 return
             }
@@ -315,12 +303,13 @@ class WalletRepository(
             }
             _connState.value = ConnState.Connecting
             try {
-                // A forced reconnect must stop the previous signer first —
-                // otherwise it keeps running until the GC finalizes the old
-                // node handle and we end up with two live signer streams.
+                // A forced reconnect must drop the previous handle first, so
+                // we don't end up with two live connections to the same node.
                 node?.let { runCatching { it.close() } }
                 node = null
-                val n = connectNode(mnemonic, storage.passphrase, storage.network, creds)
+                // No mnemonic/passphrase needed here — `creds` alone
+                // authenticates this node from now on (see setupWallet).
+                val n = connectNode(BuildConfig.EMBER_ADDR, creds)
                 node = n
                 val info = runCatching { n.getInfo() }.getOrNull()
                 _connState.value = ConnState.Connected(info)

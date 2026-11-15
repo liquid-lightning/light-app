@@ -31,6 +31,14 @@ android {
             // arm64 covers modern devices and the emulator on Apple Silicon.
             abiFilters += listOf("arm64-v8a")
         }
+
+        // ember-server address lightcore connects to (see WalletRepository.kt).
+        // Baked in at build time rather than user-entered, like most of
+        // ember-server's own config — override per flavor/signing config if a
+        // build ever needs to point at a different deployment (dev vs prod).
+        // 10.0.2.2 is the Android emulator's alias for the host machine's loopback -
+        // use the host's real LAN IP here instead when testing on a physical device.
+        buildConfigField("String", "EMBER_ADDR", "\"https://10.0.2.2:50051\"")
     }
 
     if (hasReleaseKeystore) {

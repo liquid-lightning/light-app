@@ -34,7 +34,7 @@ object Tokens {
     val Orange = Color(0xFFFB923C)
     val OrangeSoft = Color(0xFFFDBA74)
     val Purple = Color(0xFFA78BFA)
-    val Btc = Color(0xFFF7931A)
+    val Liquid = Color(0xFF0F8C8C)
     val Border = Color(0x12FFFFFF)        // rgba(255,255,255,.07)
     val BorderSoft = Color(0x0DFFFFFF)    // rgba(255,255,255,.05)
 }

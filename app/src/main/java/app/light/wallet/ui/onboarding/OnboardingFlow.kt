@@ -382,9 +382,9 @@ private fun Register(
         scope.launch {
             try {
                 repository.setupWallet(
-                    // LOCAL DEV ONLY: this dev cluster's bitcoind runs regtest, not mainnet.
-                    // Revert to "bitcoin" before shipping.
-                    mnemonic = mnemonic.trim(), passphrase = "", network = "regtest",
+                    // LOCAL DEV ONLY: this dev cluster's elementsd runs regtest, not
+                    // mainnet. Revert to "liquid" before shipping.
+                    mnemonic = mnemonic.trim(), passphrase = "", network = "liquid-regtest",
                     restore = isRestore,
                 )
                 step = 2

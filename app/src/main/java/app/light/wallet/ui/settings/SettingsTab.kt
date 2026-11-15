@@ -61,7 +61,7 @@ fun SettingsTab(
 
         SectionLabel("Display unit")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("sat" to "sat", "msat" to "msat", "btc" to "BTC").forEach { (value, label) ->
+            listOf("sat" to "sat", "msat" to "msat", "btc" to "L-BTC").forEach { (value, label) ->
                 val on = unit == value
                 Box(
                     modifier = Modifier

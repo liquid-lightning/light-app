@@ -53,9 +53,11 @@ import app.light.wallet.ui.theme.SpaceGrotesk
 import app.light.wallet.ui.theme.Tokens
 import kotlinx.coroutines.launch
 
-internal fun openMempool(context: Context, path: String) {
+/** Blockstream's Liquid Esplora explorer - mainnet/testnet path differ, no public regtest instance exists. */
+internal fun openExplorer(context: Context, network: String, path: String) {
+    val base = if (network == "liquid") "https://blockstream.info/liquid" else "https://blockstream.info/liquidtestnet"
     runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mempool.space/$path")))
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$base/$path")))
     }
 }
 
@@ -132,7 +134,7 @@ fun TransactionsTab(
                         unit = unit,
                         expanded = expandedTx == tx.txid,
                         onToggle = { expandedTx = if (expandedTx == tx.txid) null else tx.txid },
-                        onOpen = { path -> openMempool(context, path) },
+                        onOpen = { path -> openExplorer(context, repository.network, path) },
                     )
                 }
                 if (txs.orEmpty().isEmpty()) {

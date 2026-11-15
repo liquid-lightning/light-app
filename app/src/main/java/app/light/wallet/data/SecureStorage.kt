@@ -149,7 +149,7 @@ class SecureStorage(context: Context) {
         set(v) = putString(K_PASSPHRASE, v)
 
     var network: String
-        get() = plainPrefs.getString(K_NETWORK, null) ?: "bitcoin"
+        get() = plainPrefs.getString(K_NETWORK, null) ?: "liquid"
         set(v) = plainPrefs.edit().putString(K_NETWORK, v).apply()
 
     var deviceCreds: ByteArray?

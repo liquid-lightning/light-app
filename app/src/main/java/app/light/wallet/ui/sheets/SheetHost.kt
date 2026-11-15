@@ -244,7 +244,7 @@ private fun ReceiveSheet(repository: WalletRepository, onClose: () -> Unit) {
 
     androidx.compose.runtime.LaunchedEffect(Unit) { generate() }
 
-    SheetTitle("Receive bitcoin", onClose)
+    SheetTitle("Receive L-BTC", onClose)
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -293,7 +293,7 @@ private fun SendChainSheet(repository: WalletRepository, onClose: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var txid by remember { mutableStateOf<String?>(null) }
 
-    SheetTitle("Send on-chain", onClose)
+    SheetTitle("Send L-BTC", onClose)
     txid?.let {
         Text("Broadcast ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
         Text(
@@ -304,7 +304,7 @@ private fun SendChainSheet(repository: WalletRepository, onClose: () -> Unit) {
         return
     }
     FieldLabel("Destination address")
-    DesignField(addr, { addr = it }, "bc1q…", mono = true)
+    DesignField(addr, { addr = it }, "ex1q…", mono = true)
     FieldLabel("Amount (${unit.label})", topPadding = 12)
     DesignField(amount, { amount = filterAmountInput(it, unit); sendAll = false }, "0", numeric = true, big = true)
     run {
@@ -453,7 +453,7 @@ private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSh
         }
         Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Fallback address (optional)", style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Faint)
-            DesignField(fallback, { fallback = it }, "bc1q…", mono = true)
+            DesignField(fallback, { fallback = it }, "ex1q…", mono = true)
         }
         Row(modifier = Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(

@@ -45,7 +45,7 @@ import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.theme.MonoFont
 import app.light.wallet.ui.theme.SpaceGrotesk
 import app.light.wallet.ui.theme.Tokens
-import app.light.wallet.ui.transactions.openMempool
+import app.light.wallet.ui.transactions.openExplorer
 import app.light.wallet.ui.transactions.utxoStatusColor
 import kotlinx.coroutines.launch
 
@@ -117,7 +117,7 @@ fun UtxoTab(repository: WalletRepository) {
                         // Address page shows the UTXO's full life; fall back to
                         // the funding tx when the node reports no address.
                         val path = u.address?.let { a -> "address/$a" } ?: "tx/${u.txid}"
-                        openMempool(context, path)
+                        openExplorer(context, repository.network, path)
                     }
                 }
                 if (utxos.isEmpty()) {

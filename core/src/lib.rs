@@ -61,14 +61,15 @@ fn ember_err<E: std::fmt::Display>(e: E) -> CoreError {
 }
 
 /// Normalizes a user-supplied network name into the string CLN itself
-/// expects on the wire (`--network`'s own values), guarding against typos
-/// the same way the old `gl_client::bitcoin::Network` parse used to.
+/// expects on the wire (`--network`'s own values for ember's Liquid-backed
+/// CLN fork - see ember's README "Open items" for why CLN runs over Liquid,
+/// not Bitcoin, now). Guards against typos the same way the old
+/// `gl_client::bitcoin::Network` parse used to.
 fn parse_network(network: &str) -> CoreResult<String> {
     match network.to_lowercase().as_str() {
-        "bitcoin" | "mainnet" => Ok("bitcoin".to_string()),
-        "testnet" => Ok("testnet".to_string()),
-        "signet" => Ok("signet".to_string()),
-        "regtest" => Ok("regtest".to_string()),
+        "liquid" | "mainnet" => Ok("liquid".to_string()),
+        "liquidtestnet" | "liquid-testnet" | "testnet" => Ok("liquid-testnet".to_string()),
+        "liquidregtest" | "liquid-regtest" | "regtest" => Ok("liquid-regtest".to_string()),
         other => Err(CoreError::Msg(format!("unknown network: {other}"))),
     }
 }

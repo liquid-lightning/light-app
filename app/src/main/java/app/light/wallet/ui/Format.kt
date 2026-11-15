@@ -6,7 +6,7 @@ import java.util.Locale
 
 /** Display units supported by Settings. */
 enum class DisplayUnit(val label: String) {
-    SAT("sats"), MSAT("msat"), BTC("BTC");
+    SAT("sats"), MSAT("msat"), BTC("L-BTC");
 
     companion object {
         fun from(stored: String): DisplayUnit = when (stored) {
@@ -45,7 +45,7 @@ fun parseAmountToMsat(input: String, unit: DisplayUnit): ULong? {
         DisplayUnit.BTC -> {
             val d = t.toBigDecimalOrNull() ?: return null
             if (d.signum() < 0) return null
-            val msat = d.movePointRight(11) // 1 BTC = 1e11 msat
+            val msat = d.movePointRight(11) // 1 L-BTC = 1e11 msat
             if (msat.stripTrailingZeros().scale() > 0) return null // finer than 1 msat
             val bi = msat.toBigInteger()
             if (bi.bitLength() > 63) null else bi.toLong().toULong()
@@ -53,7 +53,7 @@ fun parseAmountToMsat(input: String, unit: DisplayUnit): ULong? {
     }
 }
 
-/** Input filter for an amount field: digits, plus a single dot in BTC mode. */
+/** Input filter for an amount field: digits, plus a single dot in L-BTC mode. */
 fun filterAmountInput(s: String, unit: DisplayUnit): String =
     if (unit == DisplayUnit.BTC) {
         val c = s.filter { it.isDigit() || it == '.' }
@@ -94,7 +94,7 @@ fun formatCompactSat(msat: ULong?): String {
     if (msat == null) return "—"
     val sat = (msat / 1000uL).toLong()
     return when {
-        sat >= 100_000_000 -> String.format(Locale.US, "%.2f BTC", sat / 100_000_000.0)
+        sat >= 100_000_000 -> String.format(Locale.US, "%.2f L-BTC", sat / 100_000_000.0)
         sat >= 1_000_000 -> String.format(Locale.US, "%.1fM", sat / 1_000_000.0)
         sat >= 1_000 -> String.format(Locale.US, "%,dk", sat / 1_000)
         else -> sat.toString()

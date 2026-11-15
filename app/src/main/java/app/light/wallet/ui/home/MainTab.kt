@@ -22,8 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CurrencyBitcoin
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -135,11 +135,11 @@ fun MainTab(
             val ts = if (!confirmed || tip == 0u || tip < tx.blockheight) now
             else now - ((tip - tx.blockheight).toULong() * 600uL)
             RecentItem(
-                label = if (net >= 0) "Received bitcoin" else "Sent bitcoin",
+                label = if (net >= 0) "Received L-BTC" else "Sent L-BTC",
                 time = if (!confirmed) "confirming…" else relativeTime(ts),
                 amount = (if (net >= 0) "+" else "−") + formatAmount(kotlin.math.abs(net).toULong(), unit),
                 amountColor = if (net >= 0) Tokens.Green else Tokens.Text,
-                iconColor = Tokens.Btc,
+                iconColor = Tokens.Liquid,
                 chain = true, sort = ts,
                 onClick = { onRecentTx(tx.txid) },
             )
@@ -204,7 +204,7 @@ fun MainTab(
                 }
             }
 
-            // ── Bitcoin on-chain card ──
+            // ── Liquid on-chain card ──
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -216,20 +216,13 @@ fun MainTab(
                     .padding(20.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(22.dp).background(Tokens.Btc, CircleShape), contentAlignment = Alignment.Center) {
-                        Text(
-                            "₿",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontSize = 12.sp,
-                                fontFamily = app.light.wallet.ui.theme.SpaceGrotesk,
-                            ),
-                            color = Color.White,
-                        )
+                    Box(Modifier.size(22.dp).background(Tokens.Liquid, CircleShape), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.WaterDrop, null, tint = Color.White, modifier = Modifier.size(12.dp))
                     }
-                    Text("Bitcoin · on-chain", style = MaterialTheme.typography.labelMedium, color = Tokens.Label)
+                    Text("Liquid · on-chain", style = MaterialTheme.typography.labelMedium, color = Tokens.Label)
                 }
                 // Design: one total figure (confirmed + unconfirmed), no
-                // BTC-conversion/pending subtitle line.
+                // L-BTC-conversion/pending subtitle line.
                 val chain = f?.let { it.onchainConfirmedMsat + it.onchainUnconfirmedMsat }
                 Box(Modifier.padding(top = 14.dp)) {
                     app.light.wallet.ui.BalanceText(
@@ -360,7 +353,7 @@ fun MainTab(
                     ) {
                         RowIcon(item.iconColor.copy(alpha = .1f)) {
                             Icon(
-                                if (item.chain) Icons.Filled.CurrencyBitcoin else Icons.Filled.Bolt,
+                                if (item.chain) Icons.Filled.WaterDrop else Icons.Filled.Bolt,
                                 null, tint = item.iconColor, modifier = Modifier.size(15.dp),
                             )
                         }

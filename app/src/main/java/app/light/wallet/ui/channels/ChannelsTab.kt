@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.light.wallet.core.PeerChannel
+import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.LiquidityBar
@@ -59,7 +60,9 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
     val channels = channelsRaw.orEmpty()
 
     LaunchedEffect(connState) {
-        if (repository.node != null && repository.channels.value == null) repository.refreshChannels()
+        // Gate on Connected, not just `node != null` - see MainTab's
+        // identical comment on why.
+        if (connState is ConnState.Connected && repository.channels.value == null) repository.refreshChannels()
     }
 
     val usable = channels.filter { it.state == "CHANNELD_NORMAL" }

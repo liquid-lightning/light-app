@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import app.light.wallet.core.InvoiceEntry
 import app.light.wallet.core.PayListEntry
 import app.light.wallet.data.ActivePaymentStatus
+import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.PillButton
@@ -83,7 +84,9 @@ fun InvoicesTab(
 
     // First entry only; afterwards pull-to-refresh or actions update the flows.
     LaunchedEffect(connState) {
-        if (repository.node != null && repository.invoices.value == null) {
+        // Gate on Connected, not just `node != null` - see MainTab's
+        // identical comment on why.
+        if (connState is ConnState.Connected && repository.invoices.value == null) {
             repository.refreshInvoices(); repository.refreshPays()
         }
     }

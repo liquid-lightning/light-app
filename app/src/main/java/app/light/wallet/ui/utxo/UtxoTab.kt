@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.light.wallet.core.OnchainOutput
+import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.DisplayUnit
 import app.light.wallet.ui.PullRefreshBox
@@ -62,7 +63,9 @@ fun UtxoTab(repository: WalletRepository) {
     val unit = DisplayUnit.from(repository.displayUnit)
 
     LaunchedEffect(connState) {
-        if (repository.node != null && repository.funds.value == null) repository.refreshFunds()
+        // Gate on Connected, not just `node != null` - see MainTab's
+        // identical comment on why.
+        if (connState is ConnState.Connected && repository.funds.value == null) repository.refreshFunds()
     }
 
     // Newest first: unconfirmed (no height) on top, then descending height.

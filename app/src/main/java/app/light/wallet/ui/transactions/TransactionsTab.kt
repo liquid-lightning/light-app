@@ -94,7 +94,9 @@ fun TransactionsTab(
 
     // First entry only: fetch if we never loaded; afterwards manual/pull only.
     LaunchedEffect(connState) {
-        if (repository.node != null && repository.transactions.value == null) {
+        // Gate on Connected, not just `node != null` - see MainTab's
+        // identical comment on why.
+        if (connState is ConnState.Connected && repository.transactions.value == null) {
             repository.refreshTransactions(); repository.refreshFunds()
         }
     }

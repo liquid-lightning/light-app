@@ -95,7 +95,12 @@ fun MainTab(
     // The Main screen is the only one that auto-refreshes (every 30s while
     // visible); everything else waits for pull-to-refresh or an action.
     LaunchedEffect(tick, connState) {
-        if (repository.node != null) repository.refreshMain()
+        // Gate on Connected, not just `node != null` - the node handle
+        // exists as soon as connectNode() returns, well before the pod is
+        // actually ready, and an RPC fired during that window just spams
+        // ember-server's logs with "connecting to node: transport error"
+        // for no benefit (connect() retries on its own once ready).
+        if (connState is ConnState.Connected) repository.refreshMain()
     }
 
     // Recent activity: paid invoices + lightning payments + on-chain

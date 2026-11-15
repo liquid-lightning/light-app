@@ -16,9 +16,9 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-gl-client = "0.6.0"
-# Already in gl-client's tree — used to read the description out of a
-# bolt11 when listpays doesn't store one (xpay does not persist it).
+ember-client = { path = "../../ember-client" }
+# Used to read the description out of a bolt11 when listpays doesn't store
+# one (xpay does not persist it).
 lightning-invoice = "0.33"
 bip39 = { version = "2", features = ["rand_core"] }
 rand = "0.8"

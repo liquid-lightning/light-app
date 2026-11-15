@@ -1,7 +1,16 @@
 //! lightcore — Rust core for LightApp.
 //!
-//! Wraps Blockstream Greenlight's `gl-client` and exposes a mobile-friendly
-//! API through UniFFI (Kotlin now, Swift later).
+//! Wraps `ember-client` to drive a node provisioned by ember (an in-house
+//! custodial Core Lightning provisioning service) and exposes a
+//! mobile-friendly API through UniFFI (Kotlin now, Swift later).
+//!
+//! Previously wrapped Blockstream Greenlight's `gl-client`; ember-client
+//! was deliberately shaped to mirror it (`Scheduler`, `node::ClnClient`,
+//! `register`/`recover`/`node()`), so the CLN RPC business logic below is
+//! almost unchanged from that version — only registration/recovery/
+//! connection (ember's auth model is a seed-derived challenge-signed
+//! identity exchanged for a CA-issued device certificate, not a local
+//! HSM/signer) actually differs.
 
 mod models;
 
@@ -10,23 +19,20 @@ pub use models::*;
 use std::sync::Arc;
 
 use bip39::{Language, Mnemonic};
-use gl_client::bitcoin::Network;
-use gl_client::credentials::{Device, Nobody};
-use gl_client::node::ClnClient;
-use gl_client::pb::cln;
-use gl_client::scheduler::Scheduler;
-use gl_client::signer::Signer;
+use ember_client::auth::AuthKey;
+use ember_client::pb::cln;
+use ember_client::{ClientTlsIdentity, EmberClient};
 use rand::RngCore;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
 /// Route Rust logs to Android logcat under the tag "lightcore".
 ///
-/// `enable` must be `false` on release builds: gl-client / tonic / hyper emit
-/// node ids, peer ids and payment metadata at info/error level, which anything
-/// holding READ_LOGS could harvest. Pass `BuildConfig.DEBUG` from Kotlin so the
-/// signer's logs only ever reach logcat on developer builds.
+/// `enable` must be `false` on release builds: the client/transport stack
+/// can emit node ids, peer ids and payment metadata at info/error level,
+/// which anything holding READ_LOGS could harvest. Pass `BuildConfig.DEBUG`
+/// from Kotlin so logs only ever reach logcat on developer builds.
 #[uniffi::export]
 pub fn init_logging(enable: bool) {
     if !enable {
@@ -50,30 +56,30 @@ pub fn init_logging(enable: bool) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn gl_err<E: std::fmt::Display>(e: E) -> CoreError {
+fn ember_err<E: std::fmt::Display>(e: E) -> CoreError {
     CoreError::Msg(format!("{e}"))
 }
 
-fn parse_network(network: &str) -> CoreResult<Network> {
+/// Normalizes a user-supplied network name into the string CLN itself
+/// expects on the wire (`--network`'s own values), guarding against typos
+/// the same way the old `gl_client::bitcoin::Network` parse used to.
+fn parse_network(network: &str) -> CoreResult<String> {
     match network.to_lowercase().as_str() {
-        "bitcoin" | "mainnet" => Ok(Network::Bitcoin),
-        "testnet" => Ok(Network::Testnet),
-        "signet" => Ok(Network::Signet),
-        "regtest" => Ok(Network::Regtest),
+        "bitcoin" | "mainnet" => Ok("bitcoin".to_string()),
+        "testnet" => Ok("testnet".to_string()),
+        "signet" => Ok("signet".to_string()),
+        "regtest" => Ok("regtest".to_string()),
         other => Err(CoreError::Msg(format!("unknown network: {other}"))),
     }
 }
 
-fn seed_from_mnemonic(phrase: &str, passphrase: &str) -> CoreResult<Zeroizing<Vec<u8>>> {
+/// The full 64-byte BIP39 seed (not CLN's own `hsm_secret` — ember derives
+/// that server-side straight from the mnemonic text). Self-wiping so this
+/// process's only copy doesn't outlive the call.
+fn seed_from_mnemonic(phrase: &str, passphrase: &str) -> CoreResult<Zeroizing<[u8; 64]>> {
     let mnemonic = Mnemonic::parse_in(Language::English, phrase.trim())
         .map_err(|e| CoreError::Msg(format!("invalid mnemonic: {e}")))?;
-    // Greenlight expects a 32-byte seed (first half of the BIP39 seed).
-    // Zero the full 64-byte buffer and hand back a self-wiping 32-byte copy so
-    // our own heap/stack copies don't outlive the call.
-    let mut full = mnemonic.to_seed(passphrase);
-    let seed = Zeroizing::new(full[0..32].to_vec());
-    full.zeroize();
-    Ok(seed)
+    Ok(Zeroizing::new(mnemonic.to_seed(passphrase)))
 }
 
 fn amount(msat: u64) -> cln::Amount {
@@ -117,9 +123,9 @@ fn parse_feerate(s: &str) -> CoreResult<cln::Feerate> {
         "urgent" => Style::Urgent(true),
         _ => {
             if let Some(n) = s.strip_suffix("perkw") {
-                Style::Perkw(n.parse().map_err(gl_err)?)
+                Style::Perkw(n.parse().map_err(ember_err)?)
             } else if let Some(n) = s.strip_suffix("perkb") {
-                Style::Perkb(n.parse().map_err(gl_err)?)
+                Style::Perkb(n.parse().map_err(ember_err)?)
             } else {
                 return Err(CoreError::Msg(format!("invalid feerate: {s}")));
             }
@@ -165,8 +171,49 @@ fn channel_state_name(v: i32) -> String {
     .to_string()
 }
 
+/// Packs a [`ClientTlsIdentity`] into the opaque blob `register_node`/
+/// `recover_node` return and `connect_node` takes back — three
+/// length-prefixed UTF-8 strings, in field order. Internal: Kotlin never
+/// looks inside this, just stores and replays the bytes.
+fn encode_identity(identity: &ClientTlsIdentity) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for part in [&identity.cert_pem, &identity.key_pem, &identity.ca_cert_pem] {
+        let bytes = part.as_bytes();
+        buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(bytes);
+    }
+    buf
+}
+
+fn decode_identity(bytes: &[u8]) -> CoreResult<ClientTlsIdentity> {
+    fn read_part(cursor: &mut &[u8]) -> CoreResult<String> {
+        if cursor.len() < 4 {
+            return Err(CoreError::Msg("corrupt device credentials".into()));
+        }
+        let len = u32::from_le_bytes(cursor[..4].try_into().unwrap()) as usize;
+        *cursor = &cursor[4..];
+        if cursor.len() < len {
+            return Err(CoreError::Msg("corrupt device credentials".into()));
+        }
+        let s = String::from_utf8(cursor[..len].to_vec())
+            .map_err(|e| CoreError::Msg(format!("corrupt device credentials: {e}")))?;
+        *cursor = &cursor[len..];
+        Ok(s)
+    }
+
+    let mut cursor = bytes;
+    let cert_pem = read_part(&mut cursor)?;
+    let key_pem = read_part(&mut cursor)?;
+    let ca_cert_pem = read_part(&mut cursor)?;
+    Ok(ClientTlsIdentity {
+        cert_pem,
+        key_pem,
+        ca_cert_pem,
+    })
+}
+
 // ---------------------------------------------------------------------------
-// Mnemonic / seed utilities (sync, no network)
+// Mnemonic utilities (sync, no network)
 // ---------------------------------------------------------------------------
 
 /// Generate a fresh 24-word BIP39 mnemonic from 32 bytes of OS entropy.
@@ -186,58 +233,79 @@ pub fn validate_mnemonic(phrase: String) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Registration / recovery (Nobody credentials + developer cert)
+// Registration / recovery (ember's challenge-sign-register handshake)
 // ---------------------------------------------------------------------------
 
-/// Register a brand-new Greenlight node for this seed.
-///
-/// `developer_cert` / `developer_key` are the PEM files downloaded from the
-/// Greenlight developer console. Returns the device credentials blob that must
-/// be persisted (encrypted!) and passed to `connect_node` afterwards.
+/// Register a brand-new node for this seed with ember-server at
+/// `ember_addr`. Connects with ember-client's baked-in pre-auth "app"
+/// identity (see `ember_client::default_app_identity`) to prove seed
+/// ownership and request a device certificate — the returned
+/// `device_creds` is what `connect_node` needs from now on; the
+/// mnemonic/passphrase aren't needed again after this call.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn register_node(
+    ember_addr: String,
     mnemonic: String,
     passphrase: String,
     network: String,
-    developer_cert: Vec<u8>,
-    developer_key: Vec<u8>,
-) -> CoreResult<Vec<u8>> {
+    invite_code: String,
+) -> CoreResult<RegisterResult> {
     let net = parse_network(&network)?;
     let seed = seed_from_mnemonic(&mnemonic, &passphrase)?;
-    let creds = Nobody {
-        cert: developer_cert,
-        key: developer_key,
-        ..Nobody::default()
-    };
-    let signer = Signer::new(seed.to_vec(), net, creds.clone()).map_err(gl_err)?;
-    let scheduler = Scheduler::new(net, creds).await.map_err(gl_err)?;
-    let resp = scheduler.register(&signer, None).await.map_err(gl_err)?;
-    Ok(resp.creds)
+    let auth_key = AuthKey::from_seed(seed.as_slice()).map_err(ember_err)?;
+
+    let app_identity = ember_client::default_app_identity();
+    let app_client = EmberClient::connect(ember_addr.clone(), app_identity.clone())
+        .await
+        .map_err(ember_err)?;
+
+    let registered = app_client
+        .scheduler()
+        .register(
+            &auth_key,
+            net,
+            mnemonic,
+            invite_code,
+            app_identity.ca_cert_pem,
+        )
+        .await
+        .map_err(ember_err)?;
+
+    Ok(RegisterResult {
+        node_id: registered.node_id,
+        mnemonic: registered.mnemonic,
+        device_creds: encode_identity(&registered.device_identity),
+    })
 }
 
-/// Recover access to an already-registered node (e.g. after reinstalling the
-/// app with the same mnemonic). Returns fresh device credentials.
+/// Recover access to an already-registered node (e.g. after reinstalling
+/// the app with the same mnemonic). Returns a fresh `device_creds` blob —
+/// e.g. after losing the original one; the underlying node is unchanged.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn recover_node(
+    ember_addr: String,
     mnemonic: String,
     passphrase: String,
-    network: String,
-    developer_cert: Vec<u8>,
-    developer_key: Vec<u8>,
-) -> CoreResult<Vec<u8>> {
-    let net = parse_network(&network)?;
+) -> CoreResult<RecoverResult> {
     let seed = seed_from_mnemonic(&mnemonic, &passphrase)?;
-    let creds = Nobody {
-        cert: developer_cert,
-        key: developer_key,
-        ..Nobody::default()
-    };
-    let signer = Signer::new(seed.to_vec(), net, creds.clone()).map_err(gl_err)?;
-    let scheduler = Scheduler::new(net, creds).await.map_err(gl_err)?;
-    let resp = scheduler.recover(&signer).await.map_err(gl_err)?;
-    Ok(resp.creds)
-}
+    let auth_key = AuthKey::from_seed(seed.as_slice()).map_err(ember_err)?;
 
+    let app_identity = ember_client::default_app_identity();
+    let app_client = EmberClient::connect(ember_addr.clone(), app_identity.clone())
+        .await
+        .map_err(ember_err)?;
+
+    let recovered = app_client
+        .scheduler()
+        .recover(&auth_key, mnemonic, app_identity.ca_cert_pem)
+        .await
+        .map_err(ember_err)?;
+
+    Ok(RecoverResult {
+        node_id: recovered.node_id,
+        device_creds: encode_identity(&recovered.device_identity),
+    })
+}
 
 /// Description tag of a bolt11 invoice, if it carries a direct (non-hash) one.
 fn bolt11_description(b11: &str) -> Option<String> {
@@ -255,71 +323,27 @@ fn bolt11_description(b11: &str) -> Option<String> {
 // The connected node
 // ---------------------------------------------------------------------------
 
-/// A scheduled Greenlight node with a running signer.
-///
-/// Create it with `connect_node` every time the app starts; drop it (Kotlin:
-/// `close()`) to shut the signer down.
+/// A connected node, authenticated with the device identity `connect_node`
+/// was given. Create it with `connect_node` every time the app starts;
+/// drop it (Kotlin: `close()`) when done — there's no background task to
+/// stop (ember has no local signer loop), just the connection itself.
 #[derive(uniffi::Object)]
 pub struct LightNode {
-    client: tokio::sync::Mutex<ClnClient>,
-    // Keeping the sender alive keeps the signer loop running; dropping it
-    // signals `run_forever` to stop *once it is past init_scheduler*.
-    _signer_shutdown: tokio::sync::mpsc::Sender<()>,
-    // Guaranteed stop: abort the task on Drop, which also stops a signer still
-    // stuck retrying init_scheduler while the device is offline.
-    signer_task: tokio::task::JoinHandle<()>,
+    client: tokio::sync::Mutex<ember_client::node::ClnClient>,
 }
 
-impl Drop for LightNode {
-    fn drop(&mut self) {
-        self.signer_task.abort();
-    }
-}
-
-/// Schedule the node on Greenlight's infrastructure, start the signer in the
-/// background and return a handle for making RPC calls.
+/// Connect to a node previously registered/recovered, using the
+/// `device_creds` blob `register_node`/`recover_node` returned.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn connect_node(
-    mnemonic: String,
-    passphrase: String,
-    network: String,
-    device_creds: Vec<u8>,
-) -> CoreResult<Arc<LightNode>> {
-    let net = parse_network(&network)?;
-    let seed = seed_from_mnemonic(&mnemonic, &passphrase)?;
-    let creds = Device::from_bytes(device_creds);
-
-    // The signer must keep running while the node is in use: it answers the
-    // node's signature requests (payments, channel ops, ...).
-    let signer = Signer::new(seed.to_vec(), net, creds.clone()).map_err(gl_err)?;
-    let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
-    let signer_task = tokio::spawn(async move {
-        if let Err(e) = signer.run_forever(rx).await {
-            log::error!("signer stopped: {e}");
-        }
-    });
-
-    // If scheduling fails, the signer may be stuck in init_scheduler's retry
-    // loop where dropping `tx` alone would not stop it — abort explicitly.
-    let scheduler = match Scheduler::new(net, creds).await {
-        Ok(s) => s,
-        Err(e) => {
-            signer_task.abort();
-            return Err(gl_err(e));
-        }
-    };
-    let client: ClnClient = match scheduler.node().await {
-        Ok(c) => c,
-        Err(e) => {
-            signer_task.abort();
-            return Err(gl_err(e));
-        }
-    };
+pub async fn connect_node(ember_addr: String, device_creds: Vec<u8>) -> CoreResult<Arc<LightNode>> {
+    let identity = decode_identity(&device_creds)?;
+    let ember = EmberClient::connect(ember_addr, identity)
+        .await
+        .map_err(ember_err)?;
+    let client = ember.node_client();
 
     Ok(Arc::new(LightNode {
         client: tokio::sync::Mutex::new(client),
-        _signer_shutdown: tx,
-        signer_task,
     }))
 }
 
@@ -346,7 +370,7 @@ impl LightNode {
             .unwrap_or_else(|| id.clone());
         Ok(NodeInfo {
             id,
-            alias: r.alias.unwrap_or_default(),
+            alias: r.alias,
             color: hexs(&r.color),
             network: r.network,
             blockheight: r.blockheight,
@@ -403,7 +427,7 @@ impl LightNode {
                 connected: ch.connected,
                 state: channel_state_name(ch.state),
                 short_channel_id: ch.short_channel_id.clone(),
-                channel_id: ch.channel_id.as_ref().map(|b| hexs(b)).unwrap_or_default(),
+                channel_id: hexs(&ch.channel_id),
             })
             .collect();
 
@@ -543,8 +567,9 @@ impl LightNode {
                 amount_msat: Some(cln::Amount { msat: params.amount_msat }),
                 layers: params.layers.clone(),
                 maxfee_msat: Some(cln::Amount { msat: params.maxfee_msat }),
-                final_cltv: params.final_cltv,
+                final_cltv: params.final_cltv.unwrap_or_default(),
                 maxdelay: params.maxdelay,
+                ..Default::default()
             })
             .await
             .map_err(rpc_err)?
@@ -557,15 +582,15 @@ impl LightNode {
                 .map(|rt| Route {
                     probability_ppm: rt.probability_ppm,
                     amount_msat: rt.amount_msat.as_ref().map(|a| a.msat).unwrap_or(0),
-                    final_cltv: rt.final_cltv,
+                    final_cltv: Some(rt.final_cltv),
                     path: rt
                         .path
                         .iter()
                         .map(|h| RouteHop {
-                            short_channel_id_dir: h.short_channel_id_dir.clone(),
-                            next_node_id: hexs(&h.next_node_id),
-                            amount_msat: h.amount_msat.as_ref().map(|a| a.msat).unwrap_or(0),
-                            delay: h.delay,
+                            short_channel_id_dir: Some(h.short_channel_id_dir.clone()),
+                            next_node_id: hexs(h.node_id_out.as_deref().unwrap_or_default()),
+                            amount_msat: h.amount_in_msat.as_ref().map(|a| a.msat).unwrap_or(0),
+                            delay: h.cltv_out.unwrap_or_default(),
                         })
                         .collect(),
                 })
@@ -704,20 +729,12 @@ impl LightNode {
                 _ => "unknown",
             }
             .to_string(),
-            txids: {
-                let mut ids: Vec<String> = r
-                    .txids
-                    .iter()
-                    .filter(|t| t.len() == 32)
-                    .map(|t| hexs(t))
-                    .collect();
-                if ids.is_empty() {
-                    if let Some(t) = r.txid.as_ref().filter(|t| t.len() == 32) {
-                        ids.push(hexs(t));
-                    }
-                }
-                ids
-            },
+            txids: r
+                .txids
+                .iter()
+                .filter(|t| t.len() == 32)
+                .map(|t| hexs(t))
+                .collect(),
         })
     }
 
@@ -758,7 +775,7 @@ impl LightNode {
             payment_hash: hexs(&r.payment_hash),
             payment_secret: hexs(&r.payment_secret),
             expires_at: r.expires_at,
-            created_index: r.created_index.unwrap_or(0),
+            created_index: r.created_index,
             warning,
         })
     }
@@ -811,7 +828,7 @@ impl LightNode {
                 pay_index: i.pay_index,
                 paid_at: i.paid_at,
                 payment_preimage: i.payment_preimage.as_ref().map(|b| hexs(b)),
-                created_index: i.created_index.unwrap_or(0),
+                created_index: i.created_index,
                 updated_index: i.updated_index,
             })
             .collect())
@@ -819,6 +836,11 @@ impl LightNode {
 
     // -- Paying ------------------------------------------------------------
 
+    // `PayRequest`'s fields are marked deprecated in favor of `xpay`/
+    // `rene_pay` on ember's (newer CLN) proto, but `pay` is still a real,
+    // supported RPC — not calling it isn't an option here, so the warning
+    // is silenced rather than worked around.
+    #[allow(deprecated)]
     pub async fn pay(&self, params: PayParams) -> CoreResult<PayResult> {
         let req = cln::PayRequest {
             bolt11: params.bolt11.clone(),
@@ -878,6 +900,9 @@ impl LightNode {
         })
     }
 
+    // See the note on `pay` above — `RenepayRequest`'s fields are
+    // similarly deprecated-but-supported on ember's proto.
+    #[allow(deprecated)]
     pub async fn rene_pay(&self, params: RenepayParams) -> CoreResult<RenepayResult> {
         let req = cln::RenepayRequest {
             invstring: params.invstring.clone(),

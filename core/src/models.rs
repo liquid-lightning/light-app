@@ -25,6 +25,26 @@ pub type CoreResult<T> = Result<T, CoreError>;
 // Node / info
 // ---------------------------------------------------------------------------
 
+/// Result of `register_node`: the new node's id and recovery mnemonic
+/// (show it to the user once, then never again) plus opaque device
+/// credentials to persist and pass to `connect_node` from now on — no
+/// mnemonic/passphrase needed again after this.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct RegisterResult {
+    pub node_id: String,
+    pub mnemonic: String,
+    pub device_creds: Vec<u8>,
+}
+
+/// Result of `recover_node`: same shape as [`RegisterResult`] minus the
+/// mnemonic (the caller already has it — it's what they just recovered
+/// with).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct RecoverResult {
+    pub node_id: String,
+    pub device_creds: Vec<u8>,
+}
+
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct NodeInfo {
     pub id: String,

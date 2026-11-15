@@ -5,6 +5,7 @@ import app.light.wallet.core.CreateInvoiceParams
 import app.light.wallet.core.CreateInvoiceResult
 import app.light.wallet.core.LightNode
 import app.light.wallet.core.NodeInfo
+import app.light.wallet.core.NodePhase
 import app.light.wallet.core.Funds
 import app.light.wallet.core.InvoiceEntry
 import app.light.wallet.core.ListInvoicesParams
@@ -33,6 +34,8 @@ import java.util.concurrent.atomic.AtomicLong
 sealed interface ConnState {
     data object Idle : ConnState
     data object Connecting : ConnState
+    /** ember's own pod lifecycle, polled right after connecting - distinct from a real failure. */
+    data class Provisioning(val phase: NodePhase) : ConnState
     data class Connected(val info: NodeInfo?) : ConnState
     data class Failed(val message: String) : ConnState
 }
@@ -311,6 +314,7 @@ class WalletRepository(
                 // authenticates this node from now on (see setupWallet).
                 val n = connectNode(BuildConfig.EMBER_ADDR, creds)
                 node = n
+                awaitNodeReady(n)
                 val info = runCatching { n.getInfo() }.getOrNull()
                 _connState.value = ConnState.Connected(info)
                 refreshAll()
@@ -323,6 +327,27 @@ class WalletRepository(
 
     fun requireNode(): LightNode =
         node ?: throw IllegalStateException("node is not connected yet")
+
+    /**
+     * Polls ember's own node phase (not CLN's) right after connecting, so
+     * the UI can show "setting up"/"waking up" instead of the pod-not-ready
+     * `getInfo()` failure that would otherwise show up as a bare "Offline".
+     * Bounded, not indefinite: a node that never leaves Provisioning/Stopped
+     * within [timeoutMs] just falls through to the normal getInfo attempt,
+     * which reports its own, real failure. Best-effort — if `nodePhase()`
+     * itself isn't available (older ember-server) or errors, this is a
+     * silent no-op, same as any other degraded-gracefully check here.
+     */
+    private suspend fun awaitNodeReady(n: LightNode, timeoutMs: Long = 90_000) {
+        kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                val phase = runCatching { n.nodePhase() }.getOrNull() ?: return@withTimeoutOrNull
+                if (phase != NodePhase.PROVISIONING && phase != NodePhase.STOPPED) return@withTimeoutOrNull
+                _connState.value = ConnState.Provisioning(phase)
+                kotlinx.coroutines.delay(1500)
+            }
+        }
+    }
 
     // ------------------------------------------------------------------
     // Asynchronous payments

@@ -184,9 +184,13 @@ fun MainTab(
                     style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                     modifier = Modifier.weight(1f),
                 )
-                val (chipText, chipColor) = when (connState) {
+                val (chipText, chipColor) = when (val s = connState) {
                     is ConnState.Connected -> "Node running" to Tokens.Green
                     is ConnState.Connecting -> "Connecting…" to Tokens.Orange
+                    is ConnState.Provisioning -> when (s.phase) {
+                        app.light.wallet.core.NodePhase.STOPPED -> "Waking node…" to Tokens.Orange
+                        else -> "Setting up node…" to Tokens.Orange
+                    }
                     is ConnState.Failed -> "Offline" to Tokens.Red
                     else -> "Idle" to Tokens.Dim
                 }

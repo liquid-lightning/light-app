@@ -331,6 +331,11 @@ fn bolt11_description(b11: &str) -> Option<String> {
 #[derive(uniffi::Object)]
 pub struct LightNode {
     client: tokio::sync::Mutex<ember_client::node::ClnClient>,
+    // Kept alongside `client` (not just the one `ClnClient` extracted from
+    // it) so `node_phase()` can re-ask ember's own scheduler for the pod's
+    // lifecycle phase - cheap to hold, `EmberClient` is just a handle on
+    // the shared connection (see its own doc comment).
+    ember: EmberClient,
 }
 
 /// Connect to a node previously registered/recovered, using the
@@ -345,12 +350,35 @@ pub async fn connect_node(ember_addr: String, device_creds: Vec<u8>) -> CoreResu
 
     Ok(Arc::new(LightNode {
         client: tokio::sync::Mutex::new(client),
+        ember,
     }))
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl LightNode {
     // -- Node info ---------------------------------------------------------
+
+    /// ember's own view of the node's lifecycle (pod exists? ready?
+    /// idled down?) - distinct from `get_info`, which only succeeds once
+    /// the CLN pod itself is actually reachable. Meant to be polled right
+    /// after connecting, to tell "still being created"/"waking up" apart
+    /// from a real connection failure.
+    pub async fn node_phase(&self) -> CoreResult<NodePhase> {
+        use ember_client::pb::ember::scheduler::v1::NodePhase as WirePhase;
+        let info = self.ember.scheduler().node_info().await.map_err(rpc_err)?;
+        let phase = info
+            .node
+            .and_then(|n| WirePhase::try_from(n.phase).ok())
+            .unwrap_or(WirePhase::Unspecified);
+        Ok(match phase {
+            WirePhase::Unspecified => NodePhase::Unknown,
+            WirePhase::Provisioning => NodePhase::Provisioning,
+            WirePhase::Running => NodePhase::Running,
+            WirePhase::Stopped => NodePhase::Stopped,
+            WirePhase::Failed => NodePhase::Failed,
+            WirePhase::Deleting => NodePhase::Deleting,
+        })
+    }
 
     pub async fn get_info(&self) -> CoreResult<NodeInfo> {
         let mut c = self.client.lock().await.clone();

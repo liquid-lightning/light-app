@@ -36,6 +36,21 @@ pub struct RegisterResult {
     pub device_creds: Vec<u8>,
 }
 
+/// Mirrors ember's own `NodePhase` wire enum (the scheduler's view of
+/// whether the node's pod exists and is ready, independent of whether any
+/// CLN RPC has actually succeeded) — not CLN's own lightning-level state.
+/// `Stopped` covers both "never started" and "idled down and will wake on
+/// the next real RPC" (see ember's idle-reaper).
+#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodePhase {
+    Unknown,
+    Provisioning,
+    Running,
+    Stopped,
+    Failed,
+    Deleting,
+}
+
 /// Result of `recover_node`: same shape as [`RegisterResult`] minus the
 /// mnemonic (the caller already has it — it's what they just recovered
 /// with).

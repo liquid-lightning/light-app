@@ -380,6 +380,122 @@ impl LightNode {
         })
     }
 
+    // -- Cross-asset payments -----------------------------------------------
+    //
+    // ember's own Assets service, not a CLN proxy - see
+    // ember_client::Assets's own doc comment.
+
+    /// The assets ember currently supports for cross-asset payments -
+    /// server-side config, not per-node state. Drives the asset picker on
+    /// the Receive/Pay sheets.
+    pub async fn list_assets(&self) -> CoreResult<Vec<AssetInfo>> {
+        let assets = self.ember.assets().list_assets().await.map_err(rpc_err)?;
+        Ok(assets
+            .into_iter()
+            .map(|a| AssetInfo {
+                id: a.id,
+                symbol: a.symbol,
+                name: a.name,
+            })
+            .collect())
+    }
+
+    /// Creates an invoice requiring payment in `asset` (an id from
+    /// `list_assets`, or "lbtc" for this node's own native coin).
+    pub async fn create_asset_invoice(
+        &self,
+        asset: String,
+        amount_msat: u64,
+        label: String,
+        description: String,
+    ) -> CoreResult<AssetInvoiceResult> {
+        let r = self
+            .ember
+            .assets()
+            .create_invoice(asset, amount_msat, label, description)
+            .await
+            .map_err(rpc_err)?;
+        Ok(AssetInvoiceResult {
+            wrapped: r.wrapped,
+            bolt11: r.bolt11,
+            payment_hash: r.payment_hash,
+        })
+    }
+
+    /// Estimates what paying `wrapped` would cost, without paying it -
+    /// an estimate from this node's own local pricing config, not the
+    /// swap provider's live/binding decision (made only once a payment is
+    /// actually attempted). Only returns real numbers if this node
+    /// happens to carry matching pricing config of its own; otherwise
+    /// fails the same way an unsupported pair would.
+    pub async fn quote_asset_invoice(&self, wrapped: String) -> CoreResult<AssetQuote> {
+        let r = self
+            .ember
+            .assets()
+            .quote_invoice(wrapped)
+            .await
+            .map_err(rpc_err)?;
+        Ok(AssetQuote {
+            from_asset: r.from_asset,
+            rate_ppm: r.rate_ppm,
+            fee_base_msat: r.fee_base_msat,
+            tiers: r
+                .tiers
+                .into_iter()
+                .map(|t| AssetQuoteTier {
+                    name: t.name,
+                    rate_ppm: t.rate_ppm,
+                    from_amount_msat: t.from_amount_msat,
+                })
+                .collect(),
+        })
+    }
+
+    /// Pays `wrapped`, even in an asset this node doesn't directly hold
+    /// (via a swap through the configured provider). `from_asset`: the
+    /// caller's own choice of which asset to pay with - omitted, tries a
+    /// direct payment in the invoice's own asset first, falling back to a
+    /// swap only if that fails.
+    pub async fn pay_asset_invoice(
+        &self,
+        wrapped: String,
+        tier: Option<String>,
+        from_asset: Option<String>,
+        from_amount_msat: Option<u64>,
+    ) -> CoreResult<PayAssetInvoiceResult> {
+        let r = self
+            .ember
+            .assets()
+            .pay_invoice(wrapped, tier, from_asset, from_amount_msat)
+            .await
+            .map_err(rpc_err)?;
+        Ok(PayAssetInvoiceResult {
+            payment_preimage: r.payment_preimage,
+            status: r.status,
+        })
+    }
+
+    /// This node's own channel balance per asset - drives the per-asset
+    /// balance cards on the Main dashboard.
+    pub async fn list_asset_balances(&self) -> CoreResult<Vec<AssetBalance>> {
+        let balances = self.ember.assets().balances().await.map_err(rpc_err)?;
+        Ok(balances
+            .into_iter()
+            .map(|b| AssetBalance {
+                asset: b.asset,
+                channel_balance_msat: b.channel_balance_msat,
+                onchain_balance_msat: b.onchain_balance_msat,
+            })
+            .collect())
+    }
+
+    /// The shared swap-service node to connect to by default when opening
+    /// a channel - `None` if the server has none configured.
+    pub async fn get_swap_service(&self) -> CoreResult<Option<SwapService>> {
+        let pair = self.ember.assets().swap_service().await.map_err(rpc_err)?;
+        Ok(pair.map(|(node_id, addr)| SwapService { node_id, addr }))
+    }
+
     pub async fn get_info(&self) -> CoreResult<NodeInfo> {
         let mut c = self.client.lock().await.clone();
         let r = c

@@ -497,3 +497,72 @@ pub struct WalletTx {
     pub inputs: Vec<WalletTxInput>,
     pub outputs: Vec<WalletTxOutput>,
 }
+
+// ---------------------------------------------------------------------------
+// Cross-asset payments (ember's own Assets service, not a CLN proxy)
+// ---------------------------------------------------------------------------
+
+/// One asset `list_assets` offers - an opaque id (e.g. a Liquid asset id,
+/// or "lbtc" for this node's own native coin), never interpreted client
+/// side, just shown/passed back.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetInfo {
+    pub id: String,
+    pub symbol: String,
+    pub name: String,
+}
+
+/// Result of `create_asset_invoice`: `wrapped` is the self-contained
+/// string to share/scan - not `bolt11` alone, since BOLT11 has no asset
+/// field at all (the asset requirement is carried out-of-band in this
+/// wrapper format). `bolt11`/`payment_hash` are decoded out of it
+/// server-side, for display convenience only.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetInvoiceResult {
+    pub wrapped: String,
+    pub bolt11: String,
+    pub payment_hash: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetQuoteTier {
+    pub name: String,
+    pub rate_ppm: u64,
+    pub from_amount_msat: u64,
+}
+
+/// Result of `quote_asset_invoice`: an estimate only (this node's own
+/// local pricing, not the swap provider's live/binding one) - see
+/// `LightNode::quote_asset_invoice`'s own doc comment.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetQuote {
+    pub from_asset: String,
+    pub rate_ppm: u64,
+    pub fee_base_msat: u64,
+    pub tiers: Vec<AssetQuoteTier>,
+}
+
+/// Result of `pay_asset_invoice`.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct PayAssetInvoiceResult {
+    pub payment_preimage: String,
+    pub status: String,
+}
+
+/// One entry of `list_asset_balances` - this node's own channel balance in
+/// one asset ("lbtc" for ordinary L-BTC channels).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetBalance {
+    pub asset: String,
+    pub channel_balance_msat: u64,
+    pub onchain_balance_msat: u64,
+}
+
+/// Result of `get_swap_service`: the shared swap-service node every
+/// freshly-provisioned node gets peer-connected to by default - `None` if
+/// `ember-cli set-swap-service` hasn't configured one server-side.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct SwapService {
+    pub node_id: String,
+    pub addr: String,
+}

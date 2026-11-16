@@ -188,10 +188,12 @@ private fun DesignField(
     numeric: Boolean = false,
     big: Boolean = false,
     lines: Int = 1,
+    enabled: Boolean = true,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValue,
+        enabled = enabled,
         placeholder = { Text(placeholder, color = Tokens.Faint) },
         minLines = lines,
         maxLines = if (lines > 1) lines + 1 else 1,
@@ -365,12 +367,33 @@ private fun SendChainSheet(repository: WalletRepository, onClose: () -> Unit) {
     }
 }
 
+@Composable
+private fun AssetPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .background(if (selected) Tokens.Accent.copy(alpha = .1f) else Tokens.CardDeep, RoundedCornerShape(999.dp))
+            .border(1.dp, if (selected) Tokens.Accent.copy(alpha = .4f) else Color(0x17FFFFFF), RoundedCornerShape(999.dp))
+            .noRipple(onClick = onClick)
+            .padding(horizontal = 13.dp, vertical = 8.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+            color = if (selected) Tokens.Accent else Tokens.Dim,
+        )
+    }
+}
+
 // ─────────────────────────── New invoice ───────────────────────────
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit, onClose: () -> Unit) {
     val unit = DisplayUnit.from(repository.displayUnit)
     val scope = rememberCoroutineScope()
+    val availableAssets by repository.assets.collectAsState()
+    // null = this node's own native coin (a plain invoice via createInvoice).
+    var selectedAsset by remember { mutableStateOf<app.light.wallet.core.AssetInfo?>(null) }
     var anyAmount by remember { mutableStateOf(false) }
     var amount by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
@@ -389,7 +412,22 @@ private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSh
     var error by remember { mutableStateOf<String?>(null) }
 
     SheetTitle("Create invoice", onClose)
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    if (!availableAssets.isNullOrEmpty()) {
+        FieldLabel("Receive as")
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // "any amount" only makes sense for a plain invoice - an
+            // asset invoice's amount_msat is required (assetinvoice.rs
+            // has no AmountOrAny handling the way plain invoice does).
+            AssetPill("L-BTC", selectedAsset == null) { selectedAsset = null; anyAmount = false }
+            availableAssets.orEmpty().forEach { a ->
+                AssetPill(a.symbol, selectedAsset?.id == a.id) { selectedAsset = a; anyAmount = false }
+            }
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = if (availableAssets.isNullOrEmpty()) 0.dp else 14.dp)) {
         Text(
             "Amount (${unit.label})",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold),
@@ -526,10 +564,33 @@ private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSh
     PillButton(
         if (busy) "Creating…" else "Create invoice",
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-        enabled = !busy && (anyAmount || parseAmountToMsat(amount, unit) != null),
+        enabled = !busy && ((selectedAsset == null && anyAmount) || parseAmountToMsat(amount, unit) != null),
     ) {
         busy = true; error = null
         scope.launch {
+            val asset = selectedAsset
+            if (asset != null) {
+                // assetinvoice has no "any amount" equivalent - the amount
+                // field is required (assetswap-plugin's own RPC takes a
+                // plain amount_msat, not CLN's AmountOrAny).
+                val amountMsat = parseAmountToMsat(amount, unit)
+                if (amountMsat == null) {
+                    error = "amount is required for an asset invoice"
+                    busy = false
+                    return@launch
+                }
+                runCatching {
+                    repository.createAssetInvoice(
+                        asset.id, amountMsat,
+                        customLabel.ifBlank { "lightapp-${System.currentTimeMillis()}" },
+                        desc,
+                    )
+                }.onSuccess {
+                    onOpenSheet(WalletSheet.NewInvoiceResult(it.bolt11, it.paymentHash, 0uL, wrapped = it.wrapped))
+                }.onFailure { error = it.message }
+                busy = false
+                return@launch
+            }
             val expiry = (expD.toULongOrNull() ?: 0uL) * 86400uL +
                 (expH.toULongOrNull() ?: 0uL) * 3600uL + (expM.toULongOrNull() ?: 0uL) * 60uL
             runCatching {
@@ -566,21 +627,97 @@ private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSh
 @Composable
 private fun InvoiceResultSheet(sheet: WalletSheet.NewInvoiceResult, onClose: () -> Unit) {
     val context = LocalContext.current
-    SheetTitle("Invoice created", onClose)
+    // An asset invoice's QR/share payload is the wrapper string, not
+    // bolt11 - BOLT11 has no asset field at all, so a payer's wallet
+    // would never know this invoice requires a specific asset otherwise.
+    val payload = sheet.wrapped ?: sheet.bolt11
+    SheetTitle(if (sheet.wrapped != null) "Asset invoice created" else "Invoice created", onClose)
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        QrBox(sheet.bolt11.uppercase(), sizeDp = 200)
+        QrBox(payload.uppercase(), sizeDp = 200)
         Text(
-            shortId(sheet.bolt11, 22),
+            shortId(payload, 22),
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.5.sp),
             color = Tokens.Dim,
         )
-        Text("Expires ${formatUnixTime(sheet.expiresAt)}", style = MaterialTheme.typography.bodySmall, color = Tokens.Faint)
-        PillButton("Copy invoice", modifier = Modifier.fillMaxWidth(), height = 48) {
-            copyToClipboard(context, "Invoice", sheet.bolt11)
+        if (sheet.wrapped == null) {
+            Text("Expires ${formatUnixTime(sheet.expiresAt)}", style = MaterialTheme.typography.bodySmall, color = Tokens.Faint)
+        }
+        PillButton(
+            if (sheet.wrapped != null) "Copy asset invoice" else "Copy invoice",
+            modifier = Modifier.fillMaxWidth(), height = 48,
+        ) {
+            copyToClipboard(context, "Invoice", payload)
+        }
+    }
+}
+
+// ─────────────────────────── Pay an asset invoice ───────────────────────────
+
+/**
+ * Paying a wrapped asset-invoice string - a separate, simpler flow from
+ * [PaySheet]'s xpay one: no route/amount decode (the wrapper carries the
+ * invoice's own amount, and the swap provider decides live whether it's
+ * payable), and the payment happens inline here rather than through the
+ * background-tracked payment system, since it's a single RPC call, not a
+ * multi-attempt xpay.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val availableAssets by repository.assets.collectAsState()
+    // null = automatic: try paying in the invoice's own asset directly
+    // first, falling back to a swap only if that fails (payassetinvoice's
+    // own default - see its doc comment).
+    var fromAsset by remember { mutableStateOf<app.light.wallet.core.AssetInfo?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var result by remember { mutableStateOf<app.light.wallet.core.PayAssetInvoiceResult?>(null) }
+
+    result?.let { r ->
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                if (r.status.equals("complete", ignoreCase = true)) "Payment sent ✓" else "Payment ${r.status}",
+                style = MaterialTheme.typography.titleSmall,
+                color = if (r.status.equals("complete", ignoreCase = true)) Tokens.Green else Tokens.Orange,
+            )
+            PillButton("Done", modifier = Modifier.fillMaxWidth(), height = 48, onClick = onClose)
+        }
+        return
+    }
+
+    if (!availableAssets.isNullOrEmpty()) {
+        FieldLabel("Pay with", topPadding = 14)
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AssetPill("Automatic", fromAsset == null) { fromAsset = null }
+            availableAssets.orEmpty().forEach { a ->
+                AssetPill(a.symbol, fromAsset?.id == a.id) { fromAsset = a }
+            }
+        }
+    }
+    error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
+    PillButton(
+        if (busy) "Paying…" else "Pay",
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+        enabled = !busy,
+    ) {
+        busy = true; error = null
+        scope.launch {
+            runCatching { repository.payAssetInvoice(wrapped, fromAsset = fromAsset?.id) }
+                .onSuccess { result = it }
+                .onFailure { error = it.message }
+            busy = false
         }
     }
 }
@@ -604,6 +741,13 @@ private fun PaySheet(repository: WalletRepository, prefill: String, onPaymentSta
     var decodeError by remember { mutableStateOf<String?>(null) }
     var decoding by remember { mutableStateOf(false) }
 
+    // A real bolt11/offer always starts with "ln" (BOLT11/12's own
+    // human-readable prefix); an asset invoice is a base64 wrapper string
+    // instead (assetinvoice.rs - there's no other reliable client-side
+    // signal to tell the two apart without a round trip).
+    val trimmed = inv.trim()
+    val isAssetInvoice = trimmed.length > 20 && !trimmed.startsWith("ln", ignoreCase = true)
+
     androidx.compose.runtime.LaunchedEffect(inv) {
         // Reset everything derived from the previous invoice so a stale amount
         // or decode can never be paid against a newly-pasted invoice.
@@ -611,18 +755,23 @@ private fun PaySheet(repository: WalletRepository, prefill: String, onPaymentSta
         decodeError = null
         amountOverride = ""
         decoding = false
-        if (inv.trim().length > 20) {
+        if (trimmed.length > 20 && !isAssetInvoice) {
             decoding = true
             kotlinx.coroutines.delay(350) // debounce while pasting/typing
-            runCatching { repository.requireNode().decode(inv.trim()) }
+            runCatching { repository.requireNode().decode(trimmed) }
                 .onSuccess { decoded = it }
                 .onFailure { decodeError = it.message ?: "could not decode invoice" }
             decoding = false
         }
     }
 
-    SheetTitle("Pay", onClose, badge = "xpay")
+    SheetTitle("Pay", onClose, badge = if (isAssetInvoice) "asset swap" else "xpay")
     DesignField(inv, { inv = it }, "lnbc…", mono = true, lines = 3)
+
+    if (isAssetInvoice) {
+        AssetInvoicePaySection(repository, trimmed, onClose)
+        return
+    }
 
     if (decoded == null && decodeError == null && inv.trim().length > 20) {
         Text(
@@ -789,6 +938,19 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
     var error by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<String?>(null) }
 
+    // Swap service connect-by-default shortcut: fetched once per sheet
+    // open, not re-fetched on every recomposition. `swapService == null`
+    // after loading (not still Unit/not-yet-fetched) means the server has
+    // none configured - the switch itself gets disabled in that case,
+    // rather than silently doing nothing when checked.
+    var swapService by remember { mutableStateOf<app.light.wallet.core.SwapService?>(null) }
+    var swapServiceLoaded by remember { mutableStateOf(false) }
+    var useSwapService by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        swapService = runCatching { repository.getSwapService() }.getOrNull()
+        swapServiceLoaded = true
+    }
+
     SheetTitle("Open channel", onClose)
     result?.let {
         Text("Channel funding broadcast ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
@@ -796,8 +958,30 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
         PillButton("Done", modifier = Modifier.fillMaxWidth()) { onClose() }
         return
     }
+    Row(
+        modifier = Modifier
+            .padding(bottom = 10.dp)
+            .noRipple(enabled = swapService != null) {
+                useSwapService = !useSwapService
+                peer = if (useSwapService) "${swapService?.nodeId}@${swapService?.addr}" else ""
+            },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        app.light.wallet.ui.DesignSwitch(checked = useSwapService, enabled = swapService != null) {
+            useSwapService = !useSwapService
+            peer = if (useSwapService) "${swapService?.nodeId}@${swapService?.addr}" else ""
+        }
+        Column {
+            Text("Connect to swap service", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp), color = Tokens.TextMid)
+            Text(
+                if (swapServiceLoaded && swapService == null) "not configured server-side" else "cross-asset payments, no channel",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = Tokens.Faint,
+            )
+        }
+    }
     FieldLabel("Peer connect string")
-    DesignField(peer, { peer = it }, "nodeid@host:port", mono = true, lines = 2)
+    DesignField(peer, { peer = it }, "nodeid@host:port", mono = true, lines = 2, enabled = !useSwapService)
     Row(modifier = Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Amount (${unit.label})", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)

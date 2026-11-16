@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -259,7 +260,7 @@ fun OutlinePillButton(
 
 /** The design's 34x20 pill switch with a white knob. */
 @Composable
-fun DesignSwitch(checked: Boolean, onToggle: () -> Unit) {
+fun DesignSwitch(checked: Boolean, enabled: Boolean = true, onToggle: () -> Unit) {
     Box(
         modifier = Modifier
             .size(width = 34.dp, height = 20.dp)
@@ -267,7 +268,8 @@ fun DesignSwitch(checked: Boolean, onToggle: () -> Unit) {
                 if (checked) Tokens.Accent else Color(0x33FFFFFF),
                 RoundedCornerShape(999.dp),
             )
-            .noRipple(onClick = onToggle),
+            .alpha(if (enabled) 1f else .4f)
+            .noRipple(enabled = enabled, onClick = onToggle),
     ) {
         Box(
             modifier = Modifier

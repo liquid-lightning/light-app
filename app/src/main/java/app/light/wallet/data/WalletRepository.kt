@@ -1,8 +1,14 @@
 package app.light.wallet.data
 
 import app.light.wallet.BuildConfig
+import app.light.wallet.core.AssetBalance
+import app.light.wallet.core.AssetInfo
+import app.light.wallet.core.AssetInvoiceResult
+import app.light.wallet.core.AssetQuote
 import app.light.wallet.core.CreateInvoiceParams
 import app.light.wallet.core.CreateInvoiceResult
+import app.light.wallet.core.PayAssetInvoiceResult
+import app.light.wallet.core.SwapService
 import app.light.wallet.core.LightNode
 import app.light.wallet.core.NodeInfo
 import app.light.wallet.core.NodePhase
@@ -106,6 +112,10 @@ class WalletRepository(
     val pays = MutableStateFlow<List<PayListEntry>?>(null)
     val transactions = MutableStateFlow<List<WalletTx>?>(null)
     val channels = MutableStateFlow<List<PeerChannel>?>(null)
+    /** Assets ember supports for cross-asset payments - server-side config, fetched once per connect. */
+    val assets = MutableStateFlow<List<AssetInfo>?>(null)
+    /** This node's own channel balance per asset - drives the Main dashboard's per-asset cards. */
+    val assetBalances = MutableStateFlow<List<AssetBalance>?>(null)
 
     // One in-flight fetch per data kind, conflated to the latest request: a
     // refresh fired right after an action (pay, create invoice) cancels the
@@ -148,6 +158,12 @@ class WalletRepository(
 
     fun refreshChannels() = fetch("channels") { node?.let { channels.value = it.listChannels() } }
 
+    fun refreshAssets() = fetch("assets") { node?.let { assets.value = it.listAssets() } }
+
+    fun refreshAssetBalances() = fetch("assetBalances") {
+        node?.let { assetBalances.value = it.listAssetBalances() }
+    }
+
     /** Refresh getinfo so the current block height (used for tx ages/confs) advances. */
     fun refreshInfo() = fetch("info") {
         node?.let { n ->
@@ -160,6 +176,7 @@ class WalletRepository(
     /** What the Main screen shows (and its 30s auto-refresh fetches). */
     fun refreshMain() {
         refreshInfo(); refreshFunds(); refreshInvoices(); refreshPays(); refreshTransactions()
+        refreshAssetBalances()
     }
 
     fun refreshAll() {
@@ -318,6 +335,7 @@ class WalletRepository(
                 val info = runCatching { n.getInfo() }.getOrNull()
                 _connState.value = ConnState.Connected(info)
                 refreshAll()
+                refreshAssets()
             } catch (e: Exception) {
                 node = null
                 _connState.value = ConnState.Failed(e.message ?: "connection failed")
@@ -447,4 +465,33 @@ class WalletRepository(
 
     suspend fun createInvoice(params: CreateInvoiceParams): CreateInvoiceResult =
         requireNode().createInvoice(params).also { refreshInvoices() }
+
+    // ------------------------------------------------------------------
+    // Cross-asset payments (ember's own Assets service, not a CLN proxy)
+    // ------------------------------------------------------------------
+
+    suspend fun createAssetInvoice(
+        asset: String,
+        amountMsat: ULong,
+        label: String,
+        description: String,
+    ): AssetInvoiceResult =
+        requireNode().createAssetInvoice(asset, amountMsat, label, description).also { refreshInvoices() }
+
+    /** Estimate only - see `LightNode.quoteAssetInvoice`'s own doc comment. */
+    suspend fun quoteAssetInvoice(wrapped: String): AssetQuote =
+        requireNode().quoteAssetInvoice(wrapped)
+
+    suspend fun payAssetInvoice(
+        wrapped: String,
+        tier: String? = null,
+        fromAsset: String? = null,
+        fromAmountMsat: ULong? = null,
+    ): PayAssetInvoiceResult =
+        requireNode().payAssetInvoice(wrapped, tier, fromAsset, fromAmountMsat).also {
+            refreshPays(); refreshFunds()
+        }
+
+    /** The shared swap-service node to connect to by default when opening a channel - `null` if unconfigured. */
+    suspend fun getSwapService(): SwapService? = requireNode().getSwapService()
 }

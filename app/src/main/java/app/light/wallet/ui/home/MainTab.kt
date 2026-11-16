@@ -45,6 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.light.wallet.core.AssetBalance
+import app.light.wallet.core.AssetInfo
 import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.DisplayUnit
@@ -88,6 +90,8 @@ fun MainTab(
     val invoices by repository.invoices.collectAsState()
     val pays by repository.pays.collectAsState()
     val transactions by repository.transactions.collectAsState()
+    val assets by repository.assets.collectAsState()
+    val assetBalances by repository.assetBalances.collectAsState()
     var refreshing by remember { mutableStateOf(false) }
     val tick = autoRefreshTick()
     val unit = DisplayUnit.from(repository.displayUnit)
@@ -334,6 +338,29 @@ fun MainTab(
                 }
             }
 
+            // ── Per-asset balance cards ──
+            // "lbtc" is already covered by the Liquid/Lightning cards
+            // above, so only issued-asset balances get their own card
+            // here. Looked up by id against `assets` (list_assets) for
+            // symbol/name - a balance with no matching entry still shows,
+            // under its bare asset id, rather than being dropped.
+            val assetsById = remember(assets) { assets.orEmpty().associateBy(AssetInfo::id) }
+            val issuedBalances = assetBalances.orEmpty().filter { it.asset != "lbtc" }
+            if (issuedBalances.isEmpty()) {
+                // Only once assetBalances has actually loaded (not null) -
+                // otherwise this flashes before the first fetch completes.
+                if (assetBalances != null) {
+                    Text(
+                        "No assets",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                        color = Tokens.Faint,
+                        modifier = Modifier.padding(top = 14.dp),
+                    )
+                }
+            } else {
+                issuedBalances.forEach { balance -> AssetBalanceCard(balance, assetsById[balance.asset]) }
+            }
+
             // ── Recent activity ──
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 10.dp),
@@ -378,6 +405,45 @@ fun MainTab(
                     }
                 }
             }
+        }
+    }
+}
+
+/** One issued-asset balance card - same visual family as the Liquid/Lightning cards above, smaller. */
+@Composable
+private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .background(Color(0xFF151A14), RoundedCornerShape(20.dp))
+            .border(1.dp, Tokens.Border, RoundedCornerShape(20.dp))
+            .padding(20.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(22.dp).background(Tokens.Green, CircleShape), contentAlignment = Alignment.Center) {
+                Text(
+                    (info?.symbol ?: balance.asset).take(1).uppercase(),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                )
+            }
+            Text(
+                info?.name ?: info?.symbol ?: shortId(balance.asset, 8),
+                style = MaterialTheme.typography.labelMedium,
+                color = Tokens.Label,
+            )
+        }
+        Box(Modifier.padding(top = 14.dp)) {
+            // Always "thousandths" (same arithmetic as DisplayUnit.SAT),
+            // never BTC-style /1e11 - that conversion is specific to
+            // bitcoin's own 8-decimal convention and would misrepresent
+            // any other issued asset's amount.
+            app.light.wallet.ui.BalanceText(
+                amount = formatAmount(balance.channelBalanceMsat + balance.onchainBalanceMsat, DisplayUnit.SAT),
+                unit = info?.symbol ?: balance.asset,
+                color = Tokens.Green,
+            )
         }
     }
 }

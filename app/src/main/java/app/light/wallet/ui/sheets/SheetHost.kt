@@ -677,6 +677,20 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<app.light.wallet.core.PayAssetInvoiceResult?>(null) }
+    val invoice = remember(wrapped) { decodeAssetInvoiceWrapper(wrapped) }
+    // The swap price comes from ember's price pairs (every node's
+    // pricetiers-plugin polls the same table), so this node's own quote is
+    // what the swap provider will accept too.
+    var quote by remember(wrapped) { mutableStateOf<app.light.wallet.core.AssetQuote?>(null) }
+    var quoteError by remember(wrapped) { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(wrapped) {
+        runCatching { repository.quoteAssetInvoice(wrapped) }
+            .onSuccess { quote = it }
+            .onFailure { quoteError = it.message ?: "no price available" }
+    }
+    fun symbolOf(id: String): String =
+        availableAssets?.firstOrNull { it.id == id }?.symbol
+            ?: if (id == "lbtc") "L-BTC" else id.take(8) + "…"
 
     result?.let { r ->
         Column(
@@ -706,11 +720,18 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
             }
         }
     }
+    val payable = AssetPayPreview(
+        invoice = invoice,
+        quote = quote,
+        quoteError = quoteError,
+        fromAsset = fromAsset?.id,
+        symbolOf = ::symbolOf,
+    )
     error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
     PillButton(
         if (busy) "Paying…" else "Pay",
         modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-        enabled = !busy,
+        enabled = !busy && payable,
     ) {
         busy = true; error = null
         scope.launch {
@@ -720,6 +741,120 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
             busy = false
         }
     }
+}
+
+/** What an asset-invoice wrapper asks for: `asset` and its `amount_msat`. */
+private data class AssetInvoiceInfo(val asset: String, val amountMsat: ULong)
+
+/**
+ * The wrapper is plain URL-safe base64 JSON (assetswap-plugin's
+ * `AssetInvoiceWrapper`), so its asset/amount are readable locally, no RPC.
+ */
+private fun decodeAssetInvoiceWrapper(wrapped: String): AssetInvoiceInfo? = runCatching {
+    val json = String(
+        android.util.Base64.decode(
+            wrapped,
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+        ),
+        Charsets.UTF_8,
+    )
+    val o = org.json.JSONObject(json)
+    AssetInvoiceInfo(o.getString("asset"), o.getLong("amount_msat").toULong())
+}.getOrNull()
+
+/**
+ * Leg-1 routing-fee budget payassetinvoice allows on top of the swap amount
+ * (assetswap-plugin pay.rs: `maxfee_msat = from_amount_msat / 100`).
+ */
+private const val SWAP_ROUTING_FEE_BUDGET_DIVISOR = 100uL
+
+/** The tier payassetinvoice uses when the caller names none (pay.rs). */
+private const val DEFAULT_SWAP_TIER = "medium"
+
+/** "1 234 sats" for L-BTC, "1 234 TKNB" for any issued asset. */
+private fun formatAssetAmount(msat: ULong, assetId: String, symbol: String): String =
+    formatAmount(msat, DisplayUnit.SAT) + if (assetId == "lbtc") " sats" else " $symbol"
+
+/** rate_ppm as a plain decimal: 1_500_000 -> "1.5". */
+private fun formatRate(ratePpm: ULong): String =
+    java.math.BigDecimal(ratePpm.toLong()).movePointLeft(6).stripTrailingZeros().toPlainString()
+
+/**
+ * The invoice's amount, the asset's reference price (when ember has a pair
+ * for it) and what the chosen "Pay with" asset will actually cost. Returns
+ * whether that choice is payable at all - false only for an asset with no
+ * price pair to the invoice's asset, which payassetinvoice would refuse.
+ */
+@Composable
+private fun AssetPayPreview(
+    invoice: AssetInvoiceInfo?,
+    quote: app.light.wallet.core.AssetQuote?,
+    quoteError: String?,
+    fromAsset: String?,
+    symbolOf: (String) -> String,
+): Boolean {
+    if (invoice == null) return true // unreadable wrapper: let the server decide
+    val toSym = symbolOf(invoice.asset)
+    val swapTier = quote?.tiers?.firstOrNull { it.name == DEFAULT_SWAP_TIER }
+
+    @Composable
+    fun Row2(label: String, value: String, valueColor: Color = Tokens.Text, bold: Boolean = false) {
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = Tokens.Dim, modifier = Modifier.weight(1f))
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal),
+                color = valueColor,
+            )
+        }
+    }
+
+    Column(Modifier.fillMaxWidth().padding(top = 14.dp)) {
+        Row2("Invoice", formatAssetAmount(invoice.amountMsat, invoice.asset, toSym))
+        if (quote != null && invoice.asset != "lbtc") {
+            val fromSym = symbolOf(quote.fromAsset)
+            val fee = if (quote.feeBaseMsat > 0uL) " + ${formatAssetAmount(quote.feeBaseMsat, quote.fromAsset, fromSym)} fee" else ""
+            Row2("Price", "1 $toSym = ${formatRate(quote.ratePpm)} ${if (quote.fromAsset == "lbtc") "sat L-BTC" else fromSym}$fee")
+        }
+
+        val direct = fromAsset == invoice.asset
+        val viaSwap = fromAsset != null && !direct
+        when {
+            direct -> Row2("You pay", formatAssetAmount(invoice.amountMsat, invoice.asset, toSym), bold = true)
+            viaSwap && quote != null && fromAsset == quote.fromAsset && swapTier != null -> {
+                val fromSym = symbolOf(quote.fromAsset)
+                val amount = swapTier.fromAmountMsat
+                val max = amount + amount / SWAP_ROUTING_FEE_BUDGET_DIVISOR
+                Row2("You pay", "≈ " + formatAssetAmount(amount, quote.fromAsset, fromSym), valueColor = Tokens.Accent, bold = true)
+                Text(
+                    "At most ${formatAssetAmount(max, quote.fromAsset, fromSym)} including routing fees, swapped to $toSym by the swap service.",
+                    style = MaterialTheme.typography.bodySmall, color = Tokens.Dim,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            viaSwap -> {
+                Text(
+                    if (quote == null && quoteError == null) "Getting price…"
+                    else "No price to pay $toSym with ${symbolOf(fromAsset!!)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (quote == null && quoteError == null) Tokens.Dim else Tokens.Red,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                return false
+            }
+            else -> { // Automatic: direct if this node holds the asset, else a swap
+                Row2("You pay", formatAssetAmount(invoice.amountMsat, invoice.asset, toSym) + " directly", bold = true)
+                if (quote != null && swapTier != null && quote.fromAsset != invoice.asset) {
+                    Text(
+                        "or ≈ ${formatAssetAmount(swapTier.fromAmountMsat, quote.fromAsset, symbolOf(quote.fromAsset))} via swap if you don't hold enough $toSym.",
+                        style = MaterialTheme.typography.bodySmall, color = Tokens.Dim,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+    return true
 }
 
 // ─────────────────────────── Pay (xpay) ───────────────────────────
@@ -1032,7 +1167,7 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
                     OpenChannelParams(
                         peerId = nodeId, amountSat = (parseAmountToMsat(amount, unit) ?: 0uL) / 1000uL, all = false,
                         feerate = feerate.ifBlank { null }, announce = announce, pushMsat = null,
-                        closeTo = null, minconf = minconf.toUIntOrNull(), mindepth = null, reserveMsat = null,
+                        closeTo = null, minconf = minconf.toUIntOrNull(), mindepth = null, reserveSat = null,
                     ),
                 )
             }.onSuccess { result = "txid ${it.txid}" }.onFailure { error = it.message }

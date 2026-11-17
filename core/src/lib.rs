@@ -87,12 +87,8 @@ fn amount(msat: u64) -> cln::Amount {
     cln::Amount { msat }
 }
 
-/// sat → msat with overflow rejected. `opt-level=3` builds have overflow
-/// checks off, so an unchecked `sat * 1000` would silently wrap to a tiny
-/// value and send/fund the wrong amount.
-fn checked_msat(sat: u64) -> CoreResult<u64> {
-    sat.checked_mul(1000)
-        .ok_or_else(|| CoreError::Msg(format!("amount too large: {sat} sat")))
+fn amount_sat(sat: u64) -> cln::AmountSat {
+    cln::AmountSat { sat }
 }
 
 fn amount_or_any(msat: Option<u64>) -> cln::AmountOrAny {
@@ -104,12 +100,18 @@ fn amount_or_any(msat: Option<u64>) -> cln::AmountOrAny {
     }
 }
 
-fn amount_or_all(msat: u64, all: bool) -> cln::AmountOrAll {
-    cln::AmountOrAll {
+/// `fundchannel`/`withdraw`'s own `amount` parameter is satoshi-denominated
+/// at the CLN JSON-RPC level (a long-standing convention predating most
+/// other RPCs' msat-everywhere amounts) - `AmountSatOrAll`, not
+/// `AmountOrAll`, is the correct wire type for both. Passing the msat-typed
+/// one here would silently send a bare integer CLN reads as satoshis,
+/// funding/withdrawing 1000x the intended amount.
+fn amount_sat_or_all(sat: u64, all: bool) -> cln::AmountSatOrAll {
+    cln::AmountSatOrAll {
         value: Some(if all {
-            cln::amount_or_all::Value::All(true)
+            cln::amount_sat_or_all::Value::All(true)
         } else {
-            cln::amount_or_all::Value::Amount(amount(msat))
+            cln::amount_sat_or_all::Value::AmountSat(amount_sat(sat))
         }),
     }
 }
@@ -396,6 +398,11 @@ impl LightNode {
                 id: a.id,
                 symbol: a.symbol,
                 name: a.name,
+                price: a.price.map(|p| AssetPrice {
+                    from_asset: p.from_asset,
+                    rate_ppm: p.rate_ppm,
+                    fee_base_msat: p.fee_base_msat,
+                }),
             })
             .collect())
     }
@@ -636,8 +643,8 @@ impl LightNode {
     pub async fn withdraw(&self, params: WithdrawParams) -> CoreResult<WithdrawResult> {
         let req = cln::WithdrawRequest {
             destination: params.destination.clone(),
-            satoshi: Some(amount_or_all(
-                if params.all { 0 } else { checked_msat(params.amount_sat)? },
+            satoshi: Some(amount_sat_or_all(
+                if params.all { 0 } else { params.amount_sat },
                 params.all,
             )),
             minconf: params.minconf,
@@ -826,8 +833,8 @@ impl LightNode {
             .map_err(|e| CoreError::Msg(format!("bad peer id: {e}")))?;
         let req = cln::FundchannelRequest {
             id,
-            amount: Some(amount_or_all(
-                if params.all { 0 } else { checked_msat(params.amount_sat)? },
+            amount: Some(amount_sat_or_all(
+                if params.all { 0 } else { params.amount_sat },
                 params.all,
             )),
             feerate: opt_feerate(&params.feerate)?,
@@ -836,7 +843,7 @@ impl LightNode {
             close_to: params.close_to.clone(),
             minconf: params.minconf,
             mindepth: params.mindepth,
-            reserve: params.reserve_msat.map(amount),
+            reserve: params.reserve_sat.map(amount_sat),
             ..Default::default()
         };
         let mut c = self.client.lock().await.clone();
@@ -1007,7 +1014,7 @@ impl LightNode {
         Ok(PayResult {
             payment_preimage: hexs(&r.payment_preimage),
             payment_hash: hexs(&r.payment_hash),
-            destination: r.destination.as_ref().map(|b| hexs(b)),
+            destination: (!r.destination.is_empty()).then(|| hexs(&r.destination)),
             created_at: r.created_at,
             parts: r.parts,
             amount_msat: msat_of(&r.amount_msat).unwrap_or(0),
@@ -1078,7 +1085,7 @@ impl LightNode {
             .to_string(),
             bolt11: r.bolt11.clone(),
             bolt12: r.bolt12.clone(),
-            groupid: r.groupid,
+            groupid: Some(r.groupid),
         })
     }
 

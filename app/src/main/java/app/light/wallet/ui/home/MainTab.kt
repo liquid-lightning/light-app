@@ -358,7 +358,7 @@ fun MainTab(
                     )
                 }
             } else {
-                issuedBalances.forEach { balance -> AssetBalanceCard(balance, assetsById[balance.asset]) }
+                issuedBalances.forEach { balance -> AssetBalanceCard(balance, assetsById[balance.asset], unit) }
             }
 
             // ── Recent activity ──
@@ -411,7 +411,7 @@ fun MainTab(
 
 /** One issued-asset balance card - same visual family as the Liquid/Lightning cards above, smaller. */
 @Composable
-private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?) {
+private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?, unit: DisplayUnit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -432,7 +432,19 @@ private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?) {
                 info?.name ?: info?.symbol ?: shortId(balance.asset, 8),
                 style = MaterialTheme.typography.labelMedium,
                 color = Tokens.Label,
+                modifier = Modifier.weight(1f),
             )
+            // Reference price from ember's price pairs, in whatever unit
+            // Settings has chosen - only when a pair prices this asset in L-BTC.
+            info?.price?.takeIf { it.fromAsset == "lbtc" }?.let { price ->
+                val perUnit = formatLbtcPerAssetUnit(price.ratePpm, unit)
+                val label = if (unit == DisplayUnit.SAT && perUnit == "1") "sat" else unit.label
+                Text(
+                    "1 ${info.symbol} = $perUnit $label",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                    color = Tokens.Dim,
+                )
+            }
         }
         Box(Modifier.padding(top = 14.dp)) {
             // Always "thousandths" (same arithmetic as DisplayUnit.SAT),
@@ -445,7 +457,38 @@ private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?) {
                 color = Tokens.Green,
             )
         }
+        info?.price?.takeIf { it.fromAsset == "lbtc" }?.let { price ->
+            val total = balance.channelBalanceMsat + balance.onchainBalanceMsat
+            // Reference value only: an actual swap adds the pricing margin
+            // and fees on top (see the Pay sheet's own quote).
+            val worthMsat = (java.math.BigInteger.valueOf(total.toLong())
+                * java.math.BigInteger.valueOf(price.ratePpm.toLong())
+                / java.math.BigInteger.valueOf(1_000_000L)).toLong().toULong()
+            Text(
+                "≈ ${formatAmount(worthMsat, unit)} ${unit.label}",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                color = Tokens.Dim,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
+}
+
+/**
+ * L-BTC cost of 1 displayed asset unit (1 000 msat of the asset, the same
+ * "thousandths" the balance itself is shown in) at `ratePpm`, in `unit`:
+ * that's ratePpm / 1e6 sats, kept exact so a sub-sat price still shows.
+ */
+private fun formatLbtcPerAssetUnit(ratePpm: ULong, unit: DisplayUnit): String {
+    val sats = java.math.BigDecimal(ratePpm.toLong()).movePointLeft(6)
+    val v = when (unit) {
+        DisplayUnit.SAT -> sats
+        DisplayUnit.MSAT -> sats.movePointRight(3)
+        DisplayUnit.BTC -> sats.movePointLeft(8)
+    }.stripTrailingZeros()
+    return if (v.scale() <= 0) {
+        String.format(java.util.Locale.US, "%,d", v.toBigInteger()).replace(',', ' ')
+    } else v.toPlainString()
 }
 
 @Composable

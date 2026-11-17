@@ -176,7 +176,10 @@ class WalletRepository(
     /** What the Main screen shows (and its 30s auto-refresh fetches). */
     fun refreshMain() {
         refreshInfo(); refreshFunds(); refreshInvoices(); refreshPays(); refreshTransactions()
-        refreshAssetBalances()
+        // Assets too, not just on connect: each asset carries its live
+        // price from ember (`ember-cli set-price-pair`), shown on Main.
+        // Cheap - ember answers from its own config/DB, no node call.
+        refreshAssetBalances(); refreshAssets()
     }
 
     fun refreshAll() {

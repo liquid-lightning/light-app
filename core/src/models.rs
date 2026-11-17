@@ -173,7 +173,9 @@ pub struct OpenChannelParams {
     pub close_to: Option<String>,
     pub minconf: Option<u32>,
     pub mindepth: Option<u32>,
-    pub reserve_msat: Option<u64>,
+    /// Amount in satoshi - `fundchannel`'s own `reserve` parameter is
+    /// satoshi-denominated, like `amount_sat` above, not msat.
+    pub reserve_sat: Option<u64>,
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -510,6 +512,18 @@ pub struct AssetInfo {
     pub id: String,
     pub symbol: String,
     pub name: String,
+    /// Reference price from ember's price pairs - `None` when no pair
+    /// prices this asset.
+    pub price: Option<AssetPrice>,
+}
+
+/// `rate_ppm` msat of `from_asset` (normally "lbtc") per 1_000_000 msat of
+/// the asset, plus a flat `fee_base_msat` per swap.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetPrice {
+    pub from_asset: String,
+    pub rate_ppm: u64,
+    pub fee_base_msat: u64,
 }
 
 /// Result of `create_asset_invoice`: `wrapped` is the self-contained

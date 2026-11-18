@@ -216,7 +216,15 @@ private fun OpenSourceNote(prefix: String, suffix: String) {
             },
     )
     Text(
-        "Based on olegfomenko/light-app",
+        androidx.compose.ui.text.buildAnnotatedString {
+            append("Based on ")
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = Tokens.Accent, fontWeight = FontWeight.Bold,
+                    fontFamily = app.light.wallet.ui.theme.MonoFont,
+                ),
+            ) { append("github.com/olegfomenko/light-app") }
+        },
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, lineHeight = 16.sp),
         color = Tokens.Faint,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,

@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.light.wallet.data.WalletRepository
@@ -113,7 +114,15 @@ fun SettingsTab(
             }
         }
         Text(
-            "Based on olegfomenko/light-app",
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("Based on ")
+                withStyle(
+                    androidx.compose.ui.text.SpanStyle(
+                        color = Tokens.Accent, fontWeight = FontWeight.Bold,
+                        fontFamily = app.light.wallet.ui.theme.MonoFont,
+                    ),
+                ) { append("github.com/olegfomenko/light-app") }
+            },
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
             color = Tokens.Faint,
             modifier = Modifier

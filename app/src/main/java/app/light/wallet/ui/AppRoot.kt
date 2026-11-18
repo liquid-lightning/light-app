@@ -74,10 +74,17 @@ fun AppRoot(repository: WalletRepository) {
     var onboarded by remember { mutableStateOf(repository.hasWallet()) }
 
     if (!onboarded) {
-        OnboardingFlow(repository = repository, onDone = {
-            onboarded = true
-            repository.connectInBackground()
-        })
+        Box(modifier = Modifier.fillMaxSize()) {
+            OnboardingFlow(repository = repository, onDone = {
+                onboarded = true
+                repository.connectInBackground()
+            })
+            // Seed copy happens here, before the main scaffold (and its
+            // toast host) exists.
+            app.light.wallet.ui.ToastHost(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 32.dp),
+            )
+        }
         return
     }
 
@@ -150,29 +157,9 @@ fun AppRoot(repository: WalletRepository) {
             }
             TabBar(tab, hasPending) { tab = it }
         }
-        // Design toast pill (white, bottom-centered, auto-dismiss).
-        val toastMsg by app.light.wallet.ui.Toasts.message.collectAsState()
-        toastMsg?.let { (stamp, text) ->
-            androidx.compose.runtime.LaunchedEffect(stamp) {
-                kotlinx.coroutines.delay(1800)
-                if (app.light.wallet.ui.Toasts.message.value?.first == stamp) {
-                    app.light.wallet.ui.Toasts.message.value = null
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 110.dp)
-                    .background(Tokens.Text, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
-            ) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
-                    color = Tokens.Bg,
-                )
-            }
-        }
+        // Design toast pill (white, bottom-centered, auto-dismiss). Sheets
+        // draw their own (see SheetHost) since they cover this one.
+        app.light.wallet.ui.ToastHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp))
 
         // Boot pill: floating status while the node is being scheduled.
         val connState by repository.connState.collectAsState()

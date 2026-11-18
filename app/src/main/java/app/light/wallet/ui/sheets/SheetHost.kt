@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -108,6 +109,9 @@ fun SheetHost(
             )
         },
     ) {
+        // The sheet is its own window above the activity, so AppRoot's toast
+        // would be hidden behind it - "copied" etc. need a host in here too.
+        Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
@@ -130,6 +134,8 @@ fun SheetHost(
                 is WalletSheet.Seed -> SeedSheet(repository, onClose)
                 is WalletSheet.DropWallet -> DropSheet(repository, onCancel = onClose) { onClose(); onWalletWiped() }
             }
+        }
+        app.light.wallet.ui.ToastHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp))
         }
     }
     }
@@ -261,12 +267,22 @@ private fun ReceiveSheet(repository: WalletRepository, onClose: () -> Unit) {
                     .border(1.dp, Tokens.Border, RoundedCornerShape(14.dp))
                     .noRipple { copyToClipboard(context, "Address", addr) }
                     .padding(horizontal = 15.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
                     addr,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.sp),
                     color = Tokens.TextMid, modifier = Modifier.weight(1f),
                 )
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Outlined.ContentCopy,
+                    contentDescription = "Copy address",
+                    tint = Tokens.Accent, modifier = Modifier.size(16.dp),
+                )
+            }
+            PillButton("Copy address", modifier = Modifier.fillMaxWidth(), height = 50) {
+                copyToClipboard(context, "Address", addr)
             }
             Text(
                 "bech32 · newaddr · a fresh address is generated after each use",

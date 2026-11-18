@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -308,6 +309,35 @@ object Toasts {
     val message = kotlinx.coroutines.flow.MutableStateFlow<Pair<Long, String>?>(null)
     fun show(text: String) {
         message.value = System.currentTimeMillis() to text
+    }
+}
+
+/**
+ * Draws the current [Toasts] message. Every surface that can be on top
+ * needs its own host: a ModalBottomSheet renders in a separate window above
+ * the activity, so a host in AppRoot alone stays hidden behind any open
+ * sheet (where most copy actions happen), and onboarding has no AppRoot
+ * scaffold at all. Several hosts showing the same message is harmless:
+ * only the topmost one is visible, and they all clear the same stamp.
+ */
+@Composable
+fun ToastHost(modifier: Modifier = Modifier) {
+    val toast by Toasts.message.collectAsState()
+    val (stamp, text) = toast ?: return
+    androidx.compose.runtime.LaunchedEffect(stamp) {
+        kotlinx.coroutines.delay(1800)
+        if (Toasts.message.value?.first == stamp) Toasts.message.value = null
+    }
+    Box(
+        modifier = modifier
+            .background(Tokens.Text, RoundedCornerShape(999.dp))
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+            color = Tokens.Bg,
+        )
     }
 }
 

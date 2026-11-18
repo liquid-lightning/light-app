@@ -33,12 +33,22 @@ android {
         }
 
         // ember-server address lightcore connects to (see WalletRepository.kt).
-        // Baked in at build time rather than user-entered, like most of
-        // ember-server's own config — override per flavor/signing config if a
-        // build ever needs to point at a different deployment (dev vs prod).
-        // 10.0.2.2 is the Android emulator's alias for the host machine's loopback -
-        // use the host's real LAN IP here instead when testing on a physical device.
-        buildConfigField("String", "EMBER_ADDR", "\"https://10.0.2.2:50051\"")
+        // Baked in at build time rather than user-entered. Set it per build
+        // with the EMBER_ADDR environment variable (or -PEMBER_ADDR=...), the
+        // same way EMBER_APP_CERT/EMBER_APP_KEY/EMBER_CA_CERT pick the
+        // deployment's certificates. The default, 10.0.2.2, is the Android
+        // emulator's alias for the host machine's loopback.
+        val emberAddr = providers.environmentVariable("EMBER_ADDR")
+            .orElse(providers.gradleProperty("EMBER_ADDR"))
+            .getOrElse("https://10.0.2.2:50051")
+        buildConfigField("String", "EMBER_ADDR", "\"$emberAddr\"")
+        // CLN network the node is registered on. Must match the deployment's
+        // elementsd chain and ember-server's LIGHTNING_NETWORK:
+        // liquid-testnet, liquid-regtest (local dev/e2e) or liquid.
+        val emberNetwork = providers.environmentVariable("EMBER_NETWORK")
+            .orElse(providers.gradleProperty("EMBER_NETWORK"))
+            .getOrElse("liquid-testnet")
+        buildConfigField("String", "EMBER_NETWORK", "\"$emberNetwork\"")
     }
 
     if (hasReleaseKeystore) {
@@ -108,6 +118,19 @@ val buildRustCore = tasks.register<Exec>("buildRustCore") {
     inputs.files(fileTree("${rootProject.projectDir}/core/src"))
     inputs.file("${rootProject.projectDir}/core/Cargo.toml")
     inputs.file("${rootProject.projectDir}/scripts/build-rust.sh")
+    // ember-client (a path dependency of core) bakes the deployment's app
+    // identity and CA into the library at compile time (its build.rs). Track
+    // the variables that choose those files, and the files themselves, so
+    // switching deployments or regenerating certificates rebuilds the .so
+    // instead of Gradle calling this task up to date and shipping the old CA.
+    inputs.files(fileTree("${rootProject.projectDir}/../ember-client") {
+        include("src/**", "build.rs", "Cargo.toml", ".resources/**", "proto/**")
+    })
+    listOf("EMBER_APP_CERT", "EMBER_APP_KEY", "EMBER_CA_CERT").forEach { name ->
+        val path = providers.environmentVariable(name)
+        inputs.property(name, path.orElse(""))
+        path.orNull?.let { inputs.file(it) }
+    }
     outputs.dir("${projectDir}/src/main/jniLibs")
     outputs.dir("${projectDir}/src/main/java/app/light/wallet/core")
 

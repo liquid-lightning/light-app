@@ -382,9 +382,9 @@ private fun Register(
         scope.launch {
             try {
                 repository.setupWallet(
-                    // LOCAL DEV ONLY: this dev cluster's elementsd runs regtest, not
-                    // mainnet. Revert to "liquid" before shipping.
-                    mnemonic = mnemonic.trim(), passphrase = "", network = "liquid-regtest",
+                    // Set per build in app/build.gradle.kts, next to EMBER_ADDR.
+                    mnemonic = mnemonic.trim(), passphrase = "",
+                    network = app.light.wallet.BuildConfig.EMBER_NETWORK,
                     restore = isRestore,
                 )
                 step = 2

@@ -44,7 +44,10 @@ class SecureStorage(context: Context) {
         context.getSharedPreferences("light_prefs", Context.MODE_PRIVATE)
 
     companion object {
-        private const val KEY_ALIAS = "lightapp_master_key"
+        private const val KEY_ALIAS = "liqhtapp_master_key"
+        // Alias used before the LiqhtApp rename. Installs that still have it
+        // are moved to KEY_ALIAS by migrateKeyAlias().
+        private const val LEGACY_KEY_ALIAS = "lightapp_master_key"
         private const val KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORM = "AES/GCM/NoPadding"
         private const val TAG_BITS = 128
@@ -107,13 +110,53 @@ class SecureStorage(context: Context) {
             Base64.encodeToString(ct, Base64.NO_WRAP)
     }
 
-    private fun decrypt(stored: String): ByteArray {
+    private fun decrypt(stored: String): ByteArray =
+        try {
+            decryptWith(masterKey(), stored)
+        } catch (e: Exception) {
+            // Not yet re-encrypted by migrateKeyAlias(): still under the old key.
+            val legacy = legacyKey() ?: throw e
+            decryptWith(legacy, stored)
+        }
+
+    private fun decryptWith(key: SecretKey, stored: String): ByteArray {
         val (ivB64, ctB64) = stored.split(":", limit = 2)
         val iv = Base64.decode(ivB64, Base64.NO_WRAP)
         val ct = Base64.decode(ctB64, Base64.NO_WRAP)
         val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.DECRYPT_MODE, masterKey(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
         return cipher.doFinal(ct)
+    }
+
+    private fun legacyKey(): SecretKey? {
+        val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        return ks.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
+    }
+
+    /**
+     * Re-encrypt everything stored under the pre-rename Keystore alias with
+     * the current one, then delete the old key. Call from a background
+     * coroutine at app start (Keystore work, and the key only works while the
+     * device is unlocked). Idempotent and crash-safe: the old key is deleted
+     * only after every value has been rewritten and committed, and until then
+     * [decrypt] falls back to it. If any value fails to decrypt, nothing is
+     * deleted and the migration retries on the next launch.
+     */
+    @Synchronized
+    fun migrateKeyAlias() {
+        val legacy = legacyKey() ?: return
+        val current = masterKey()
+        val rewritten = mutableMapOf<String, String>()
+        for ((name, value) in prefs.all) {
+            val stored = value as? String ?: continue
+            if (runCatching { decryptWith(current, stored) }.isSuccess) continue
+            val plain = runCatching { decryptWith(legacy, stored) }.getOrNull() ?: return
+            rewritten[name] = encrypt(plain)
+        }
+        val editor = prefs.edit()
+        rewritten.forEach { (name, ct) -> editor.putString(name, ct) }
+        if (!editor.commit()) return
+        KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(LEGACY_KEY_ALIAS)
     }
 
     fun putBytes(key: String, value: ByteArray) {
@@ -136,6 +179,9 @@ class SecureStorage(context: Context) {
     fun wipe() {
         prefs.edit().clear().apply()
         plainPrefs.edit().clear().apply()
+        runCatching {
+            KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(LEGACY_KEY_ALIAS)
+        }
     }
 
     // -- Wallet-specific accessors -----------------------------------------

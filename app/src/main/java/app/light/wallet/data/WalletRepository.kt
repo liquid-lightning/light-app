@@ -199,7 +199,10 @@ class WalletRepository(
     // connect() awaits it so the first post-update connect can't read a
     // pre-migration default network.
     private val migration: kotlinx.coroutines.Job =
-        scope.launch { runCatching { storage.migrateNonSecrets() } }
+        scope.launch {
+            runCatching { storage.migrateKeyAlias() }
+            runCatching { storage.migrateNonSecrets() }
+        }
 
     private val connectMutex = Mutex()
     private val paymentIds = AtomicLong(1)

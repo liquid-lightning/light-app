@@ -160,7 +160,7 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
             throw GradleException(
                 "bundleRelease needs your own upload key — app/keystore.properties is missing.\n" +
                     "Create the keystore (you choose and keep the password):\n" +
-                    "  keytool -genkeypair -v -keystore ~/lightapp-upload.jks \\\n" +
+                    "  keytool -genkeypair -v -keystore ~/liqhtapp-upload.jks \\\n" +
                     "    -alias upload -keyalg RSA -keysize 4096 -validity 10000\n" +
                     "then write app/keystore.properties (git-ignored) with storeFile / " +
                     "storePassword / keyAlias / keyPassword.",

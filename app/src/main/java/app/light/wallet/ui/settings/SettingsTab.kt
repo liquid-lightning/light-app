@@ -101,17 +101,32 @@ fun SettingsTab(
             SettingsRow(
                 icon = { Icon(Icons.Outlined.OpenInNew, null, tint = Tokens.Accent, modifier = Modifier.size(14.dp)) },
                 title = "Source code",
-                subtitle = "github.com/olegfomenko/light-app",
+                subtitle = "github.com/liquid-lightning/light-app",
                 monoSubtitle = true,
             ) {
                 context.startActivity(
                     android.content.Intent(
                         android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse("https://github.com/olegfomenko/light-app"),
+                        android.net.Uri.parse("https://github.com/liquid-lightning/light-app"),
                     ),
                 )
             }
         }
+        Text(
+            "Based on olegfomenko/light-app",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+            color = Tokens.Faint,
+            modifier = Modifier
+                .padding(start = 4.dp, top = 8.dp)
+                .noRipple {
+                    context.startActivity(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/olegfomenko/light-app"),
+                        ),
+                    )
+                },
+        )
 
         SectionLabel("Danger zone", topPadding = 20)
         Row(

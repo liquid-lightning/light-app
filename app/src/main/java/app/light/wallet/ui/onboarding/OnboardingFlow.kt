@@ -184,6 +184,10 @@ private fun Welcome(onCreate: () -> Unit, onRestore: () -> Unit) {
 @Composable
 private fun OpenSourceNote(prefix: String, suffix: String) {
     val context = LocalContext.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
     val text = androidx.compose.ui.text.buildAnnotatedString {
         append(prefix)
         withStyle(
@@ -191,7 +195,7 @@ private fun OpenSourceNote(prefix: String, suffix: String) {
                 color = Tokens.Accent, fontWeight = FontWeight.Bold,
                 fontFamily = app.light.wallet.ui.theme.MonoFont,
             ),
-        ) { append("github.com/olegfomenko/light-app") }
+        ) { append("github.com/liquid-lightning/light-app") }
         append(suffix)
     }
     Text(
@@ -206,11 +210,29 @@ private fun OpenSourceNote(prefix: String, suffix: String) {
                 context.startActivity(
                     android.content.Intent(
                         android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://github.com/liquid-lightning/light-app"),
+                    ),
+                )
+            },
+    )
+    Text(
+        "Based on olegfomenko/light-app",
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, lineHeight = 16.sp),
+        color = Tokens.Faint,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+            .noRipple {
+                context.startActivity(
+                    android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
                         android.net.Uri.parse("https://github.com/olegfomenko/light-app"),
                     ),
                 )
             },
     )
+    }
 }
 
 @Composable

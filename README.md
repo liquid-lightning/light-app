@@ -183,7 +183,7 @@ sudo apt install -y protobuf-compiler   # Debian / Ubuntu
 ### 4. Clone the repository
 
 ```bash
-git clone https://github.com/olegfomenko/light-app.git
+git clone https://github.com/liquid-lightning/light-app.git
 cd light-app
 ```
 

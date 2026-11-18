@@ -52,7 +52,7 @@ input{outline:none}
       <div onClick="{{ hGenWallet }}" style="height:54px;border-radius:999px;background:#FACC15;color:#241A02;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;cursor:pointer" style-hover="background:#FDE047">Create new wallet</div>
       <div onClick="{{ hRestore }}" style="height:54px;border-radius:999px;border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#B7C2CC;cursor:pointer" style-hover="border-color:rgba(250,204,21,.5);color:#EEF3F6">Restore from seed</div>
       <div onClick="{{ hSkipDemo }}" style="text-align:center;padding:8px;font-size:13.5px;color:#7E8B99;cursor:pointer" style-hover="color:#FACC15">Skip — explore with demo node</div>
-      <div style="text-align:center;font-size:12.5px;color:#5A6673;line-height:1.6;padding:2px 8px 0">LightApp is open source. We recommend double-checking the code at <span onClick="{{ hOpenGithub }}" style="color:#FACC15;font-weight:700;cursor:pointer;font-family:ui-monospace,monospace">github.com/olegfomenko/light-app</span> before using the application.</div>
+      <div style="text-align:center;font-size:12.5px;color:#5A6673;line-height:1.6;padding:2px 8px 0">LightApp is open source. We recommend double-checking the code at <span onClick="{{ hOpenGithub }}" style="color:#FACC15;font-weight:700;cursor:pointer;font-family:ui-monospace,monospace">github.com/liquid-lightning/light-app</span> before using the application.</div>
     </div>
   </div>
   </sc-if>
@@ -124,7 +124,7 @@ input{outline:none}
     </div>
     <div style="margin-top:14px;font-size:12.5px;color:#7E8B99;line-height:1.6">Keys are re-encrypted into the keystore after import; the plaintext files are wiped from app storage.</div>
     <div style="flex:1"></div>
-    <div style="text-align:center;font-size:12.5px;color:#5A6673;line-height:1.6;padding:0 8px">Before you continue: this app is open source — double-check the code at <span onClick="{{ hOpenGithub }}" style="color:#FACC15;font-weight:700;cursor:pointer;font-family:ui-monospace,monospace">github.com/olegfomenko/light-app</span>.</div>
+    <div style="text-align:center;font-size:12.5px;color:#5A6673;line-height:1.6;padding:0 8px">Before you continue: this app is open source — double-check the code at <span onClick="{{ hOpenGithub }}" style="color:#FACC15;font-weight:700;cursor:pointer;font-family:ui-monospace,monospace">github.com/liquid-lightning/light-app</span>.</div>
     <div onClick="{{ hRegister }}" style="margin-top:14px;height:54px;border-radius:999px;background:{{ regBtnBg }};color:{{ regBtnColor }};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;cursor:pointer">{{ regBtnLabel }}</div>
   </div>
   </sc-if>
@@ -432,7 +432,7 @@ input{outline:none}
       </div>
       <div onClick="{{ hOpenGithub }}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer" style-hover="background:rgba(255,255,255,.02)">
         <div style="width:32px;height:32px;border-radius:10px;background:rgba(250,204,21,.08);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#FACC15" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2H2.5A1.5 1.5 0 0 0 1 3.5v5A1.5 1.5 0 0 0 2.5 10h5A1.5 1.5 0 0 0 9 8.5V6M7 1h4v4M11 1 5.5 6.5"></path></svg></div>
-        <div style="flex:1;display:flex;flex-direction:column;gap:1px"><span style="font-weight:700;font-size:15px">Source code</span><span style="font-size:12.5px;color:#7E8B99;font-family:ui-monospace,monospace">github.com/olegfomenko/light-app</span></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:1px"><span style="font-weight:700;font-size:15px">Source code</span><span style="font-size:12.5px;color:#7E8B99;font-family:ui-monospace,monospace">github.com/liquid-lightning/light-app</span></div>
       </div>
     </div>
     <div style="font-size:12.5px;font-weight:700;color:#9FB0BC;margin:20px 2px 8px">Danger zone</div>
@@ -1003,7 +1003,7 @@ class Component extends DCLogic {
       openSeed: () => this.setState({ sheet: 'seed', snRevealed: false }),
       snBlur: s.snRevealed ? 'none' : 'blur(5px)', snHidden: !s.snRevealed, hSnReveal: () => this.setState({ snRevealed: true }),
       hCopySeed: () => this.toast(s.snRevealed ? 'Seed copied' : 'Reveal the seed first'),
-      hOpenGithub: () => window.open('https://github.com/olegfomenko/light-app', '_blank'),
+      hOpenGithub: () => window.open('https://github.com/liquid-lightning/light-app', '_blank'),
       hOpenGlConsole: () => window.open('https://greenlight.blockstream.com/', '_blank'),
       hExportCrt: () => this.toast('client.crt exported via share sheet'),
       hExportKey: () => this.toast('client-key.pem exported via share sheet'),

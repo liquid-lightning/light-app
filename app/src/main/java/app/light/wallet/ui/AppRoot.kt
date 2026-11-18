@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -161,30 +164,21 @@ fun AppRoot(repository: WalletRepository) {
         // draw their own (see SheetHost) since they cover this one.
         app.light.wallet.ui.ToastHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp))
 
-        // Boot pill: floating status while the node is being scheduled.
+        // Boot pill: floating status for the whole wait - connecting to
+        // ember, then the node being set up or woken from idle (which can
+        // take tens of seconds).
         val connState by repository.connState.collectAsState()
-        if (connState is ConnState.Connecting) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 52.dp)
-                    .background(Color(0xF210181E), RoundedCornerShape(999.dp))
-                    .border(1.dp, Tokens.Accent.copy(alpha = .3f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 16.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                androidx.compose.material3.CircularProgressIndicator(
-                    color = Tokens.Accent, strokeWidth = 2.dp,
-                    modifier = Modifier.size(13.dp),
-                )
-                Text(
-                    "Contacting Greenlight scheduler…",
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                    color = Tokens.TextMid,
-                )
-            }
+        val waiting = connState is ConnState.Connecting || connState is ConnState.Provisioning
+        androidx.compose.animation.AnimatedVisibility(
+            visible = waiting,
+            enter = fadeIn(tween(200)) + androidx.compose.animation.slideInVertically(tween(250)) { -it },
+            exit = fadeOut(tween(250)) + androidx.compose.animation.slideOutVertically(tween(250)) { -it },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 52.dp),
+        ) {
+            NodeWaitPill(connState)
         }
         SheetHost(
             repository, sheet,
@@ -244,5 +238,86 @@ private fun TabBar(current: Tab, hasPending: Boolean, onPick: (Tab) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Floating "please wait" pill: spinner, what's happening, how long it's
+ * been, and an indeterminate progress sweep. Keeps showing the last
+ * state's text while it animates out.
+ */
+@Composable
+private fun NodeWaitPill(connState: ConnState) {
+    var last by remember { mutableStateOf(connState) }
+    if (connState is ConnState.Connecting || connState is ConnState.Provisioning) last = connState
+    val (title, hint) = when (val s = last) {
+        is ConnState.Provisioning -> when (s.phase) {
+            app.light.wallet.core.NodePhase.STOPPED -> "Waking your node…" to "It was asleep after inactivity"
+            else -> "Starting your node…" to "Usually takes under a minute"
+        }
+        else -> "Connecting to server…" to "Establishing a secure connection"
+    }
+
+    // Seconds since the wait began (resets only when the pill reappears).
+    var elapsed by remember { mutableStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            elapsed++
+        }
+    }
+
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "wait")
+    val glow by pulse.animateFloat(
+        initialValue = .25f, targetValue = .7f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            tween(900), androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "glow",
+    )
+
+    Column(
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .background(Color(0xF210181E), RoundedCornerShape(18.dp))
+            .border(1.dp, Tokens.Accent.copy(alpha = glow), RoundedCornerShape(18.dp))
+            .padding(start = 16.dp, end = 16.dp, top = 11.dp, bottom = 10.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = Tokens.Accent, strokeWidth = 2.dp,
+                modifier = Modifier.size(16.dp),
+            )
+            Column {
+                androidx.compose.animation.AnimatedContent(
+                    targetState = title,
+                    transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
+                    label = "waitTitle",
+                ) { t ->
+                    Text(
+                        t,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                        color = Tokens.Text,
+                    )
+                }
+                Text(
+                    if (elapsed >= 3) "$hint · ${elapsed}s" else hint,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = Tokens.TextMid,
+                )
+            }
+        }
+        androidx.compose.material3.LinearProgressIndicator(
+            color = Tokens.Accent,
+            trackColor = Tokens.Accent.copy(alpha = .12f),
+            modifier = Modifier
+                .padding(top = 9.dp)
+                .width(220.dp)
+                .height(3.dp)
+                .clip(RoundedCornerShape(999.dp)),
+        )
     }
 }

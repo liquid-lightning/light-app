@@ -2,6 +2,8 @@
 
 package app.light.wallet.ui.home
 
+import androidx.compose.animation.core.animateFloat
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -212,7 +214,21 @@ fun MainTab(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box(Modifier.size(6.dp).background(chipColor, CircleShape))
+                    // Pulsing dot while the node is still coming up.
+                    val busy = connState is ConnState.Connecting || connState is ConnState.Provisioning
+                    val dotAlpha = if (busy) {
+                        val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "chipDot")
+                        val a by t.animateFloat(
+                            initialValue = 1f, targetValue = .2f,
+                            animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                                androidx.compose.animation.core.tween(700),
+                                androidx.compose.animation.core.RepeatMode.Reverse,
+                            ),
+                            label = "chipDotAlpha",
+                        )
+                        a
+                    } else 1f
+                    Box(Modifier.size(6.dp).background(chipColor.copy(alpha = dotAlpha), CircleShape))
                     Text(chipText, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold), color = chipColor)
                 }
             }

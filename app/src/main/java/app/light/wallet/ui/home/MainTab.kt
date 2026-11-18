@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -40,7 +43,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.animation.togetherWith
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -233,148 +238,119 @@ fun MainTab(
                 }
             }
 
-            // ── Liquid on-chain card ──
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(listOf(Color(0xFF141B23), Color(0xFF10161C))),
-                        RoundedCornerShape(20.dp),
-                    )
-                    .border(1.dp, Tokens.Border, RoundedCornerShape(20.dp))
-                    .padding(20.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(22.dp).background(Tokens.Liquid, CircleShape), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.WaterDrop, null, tint = Color.White, modifier = Modifier.size(12.dp))
-                    }
-                    Text("Liquid · on-chain", style = MaterialTheme.typography.labelMedium, color = Tokens.Label)
-                }
-                // Design: one total figure (confirmed + unconfirmed), no
-                // L-BTC-conversion/pending subtitle line.
-                val chain = f?.let { it.onchainConfirmedMsat + it.onchainUnconfirmedMsat }
-                Box(Modifier.padding(top = 14.dp)) {
-                    app.light.wallet.ui.BalanceText(
-                        amount = formatAmount(chain, unit),
-                        unit = unit.label,
-                    )
-                }
-                Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SoftPillButton("Receive", modifier = Modifier.weight(1f),
-                        icon = Icons.Filled.ArrowDownward) { onOpenSheet(WalletSheet.Receive) }
-                    SoftPillButton("Send", modifier = Modifier.weight(1f),
-                        icon = Icons.Filled.ArrowUpward) { onOpenSheet(WalletSheet.SendChain) }
-                    MoreDot { onGoTransactions() }
-                }
+            // ── Asset pager: L-BTC first, then every issued asset ──
+            // Each page has the same layout (on-chain + Lightning cards).
+            // Swipe or tap the arrows to switch.
+            val assetsById = remember(assets) { assets.orEmpty().associateBy(AssetInfo::id) }
+            val pages = remember(assets, assetBalances) {
+                val balById = assetBalances.orEmpty().associateBy(AssetBalance::asset)
+                val known = assets.orEmpty().filter { it.id != "lbtc" }.map { it.id }
+                val unknown = balById.keys.filter { it != "lbtc" && it !in known }
+                listOf<String?>(null) + (known + unknown).map { it }
             }
-
-            // ── Lightning card ──
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 14.dp)
-                    .background(
-                        Brush.linearGradient(listOf(Color(0xFF26200F), Color(0xFF181307))),
-                        RoundedCornerShape(20.dp),
-                    )
-                    .border(1.dp, Tokens.Accent.copy(alpha = .2f), RoundedCornerShape(20.dp))
-                    .padding(20.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        Modifier.size(22.dp).background(Tokens.Accent.copy(alpha = .15f), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Filled.Bolt, null, tint = Tokens.Accent, modifier = Modifier.size(13.dp)) }
-                    Text("Lightning", style = MaterialTheme.typography.labelMedium, color = Tokens.Label)
-                    Spacer(Modifier.weight(1f))
-                    val chCount = f?.channels?.size ?: 0
-                    Text("$chCount channels", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim)
-                }
-                Box(Modifier.padding(top = 14.dp)) {
-                    app.light.wallet.ui.BalanceText(
-                        amount = formatAmount(f?.outboundMsat, unit),
-                        unit = unit.label,
-                        color = Tokens.Accent,
-                    )
-                }
+            val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { pages.size })
+            val current = pages.getOrNull(pagerState.currentPage)
+            PagerHeader(
+                title = current?.let { id -> assetsById[id]?.symbol ?: shortId(id, 6) } ?: "L-BTC",
+                subtitle = current?.let { id -> assetsById[id]?.name } ?: "Liquid Bitcoin",
+                page = pagerState.currentPage,
+                pageCount = pages.size,
+                onPrev = { uiScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) } },
+                onNext = { uiScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } },
+            )
+            androidx.compose.foundation.pager.HorizontalPager(
+                state = pagerState,
+                pageSpacing = 14.dp,
+                verticalAlignment = Alignment.Top,
+                key = { pages.getOrNull(it) ?: "lbtc" },
+                modifier = Modifier.fillMaxWidth(),
+            ) { index ->
+                val assetId = pages.getOrNull(index)
                 val nodeId = (connState as? ConnState.Connected)?.info?.id
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 14.dp)
-                        .height(1.dp)
-                        .background(Tokens.Border),
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp)
-                        .noRipple(enabled = nodeId != null) {
-                            nodeId?.let { copyToClipboard(context, "Node ID", it) }
-                        },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        "Node ID",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
-                        color = Tokens.Dim,
-                    )
-                    Text(
-                        shortId(nodeId, 12),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = MonoFont),
-                        color = Tokens.TextMid,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (nodeId != null) Icon(Icons.Outlined.ContentCopy, null, tint = Tokens.Accent, modifier = Modifier.size(12.dp))
-                }
-                Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp)
-                            .background(Tokens.Accent, RoundedCornerShape(999.dp))
-                            .noRipple { onOpenSheet(WalletSheet.NewInvoice) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            "Create invoice",
-                            style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.5.sp),
-                            color = Tokens.AccentInk,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 6.dp),
+                if (assetId == null) {
+                    Column {
+                        OnchainCard(
+                            title = "Liquid · on-chain",
+                            badge = { Icon(Icons.Filled.WaterDrop, null, tint = Color.White, modifier = Modifier.size(12.dp)) },
+                            badgeColor = Tokens.Liquid,
+                            amount = formatAmount(f?.let { it.onchainConfirmedMsat + it.onchainUnconfirmedMsat }, unit),
+                            unitLabel = unit.label,
+                            worth = null,
+                            onReceive = { onOpenSheet(WalletSheet.Receive()) },
+                            onSend = { onOpenSheet(WalletSheet.SendChain) },
+                            onMore = onGoTransactions,
+                        )
+                        LightningCard(
+                            title = "Lightning",
+                            channels = f?.channels?.size ?: 0,
+                            amount = formatAmount(f?.outboundMsat, unit),
+                            unitLabel = unit.label,
+                            worth = null,
+                            nodeId = nodeId,
+                            onCopyNodeId = { nodeId?.let { copyToClipboard(context, "Node ID", it) } },
+                            onCreateInvoice = { onOpenSheet(WalletSheet.NewInvoice()) },
+                            onPay = { onOpenSheet(WalletSheet.Pay()) },
+                            onMore = { onOpenSheet(WalletSheet.NodeInfoSheet) },
                         )
                     }
-                    SoftPillButton("Pay invoice", modifier = Modifier.weight(1f)) { onOpenSheet(WalletSheet.Pay()) }
-                    MoreDot { onOpenSheet(WalletSheet.NodeInfoSheet) }
+                } else {
+                    val info = assetsById[assetId]
+                    val balance = assetBalances.orEmpty().firstOrNull { it.asset == assetId }
+                    val symbol = info?.symbol ?: shortId(assetId, 6)
+                    val price = info?.price?.takeIf { it.fromAsset == "lbtc" }
+                    // Reference value only: an actual swap adds the pricing
+                    // margin and fees on top (see the Pay sheet's own quote).
+                    fun worth(msat: ULong): String? = price?.let {
+                        val v = (java.math.BigInteger.valueOf(msat.toLong())
+                            * java.math.BigInteger.valueOf(it.ratePpm.toLong())
+                            / java.math.BigInteger.valueOf(1_000_000L)).toLong().toULong()
+                        "≈ ${formatAmount(v, unit)} ${unit.label}"
+                    }
+                    val onchain = balance?.onchainBalanceMsat ?: 0uL
+                    val channel = balance?.channelBalanceMsat ?: 0uL
+                    Column {
+                        // Asset amounts are always shown in "thousandths"
+                        // (same arithmetic as DisplayUnit.SAT), never with
+                        // bitcoin's 8-decimal BTC conversion.
+                        OnchainCard(
+                            title = "$symbol · on-chain",
+                            badge = {
+                                Text(
+                                    symbol.take(1).uppercase(),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                                    color = Color.White,
+                                )
+                            },
+                            badgeColor = Tokens.Green,
+                            amount = formatAmount(onchain, DisplayUnit.SAT),
+                            unitLabel = symbol,
+                            amountColor = Tokens.Green,
+                            worth = worth(onchain),
+                            priceLine = price?.let {
+                                val perUnit = formatLbtcPerAssetUnit(it.ratePpm, unit)
+                                val label = if (unit == DisplayUnit.SAT && perUnit == "1") "sat" else unit.label
+                                "1 $symbol = $perUnit $label"
+                            },
+                            onReceive = { onOpenSheet(WalletSheet.Receive(symbol)) },
+                            // withdraw has no asset parameter - on-chain
+                            // sends are L-BTC only for now.
+                            onSend = null,
+                            onMore = onGoTransactions,
+                        )
+                        LightningCard(
+                            title = "Lightning · $symbol",
+                            channels = null,
+                            amount = formatAmount(channel, DisplayUnit.SAT),
+                            unitLabel = symbol,
+                            worth = worth(channel),
+                            nodeId = nodeId,
+                            onCopyNodeId = { nodeId?.let { copyToClipboard(context, "Node ID", it) } },
+                            onCreateInvoice = { onOpenSheet(WalletSheet.NewInvoice(assetId)) },
+                            onPay = { onOpenSheet(WalletSheet.Pay()) },
+                            onMore = { onOpenSheet(WalletSheet.NodeInfoSheet) },
+                        )
+                    }
                 }
-            }
-
-            // ── Per-asset balance cards ──
-            // "lbtc" is already covered by the Liquid/Lightning cards
-            // above, so only issued-asset balances get their own card
-            // here. Looked up by id against `assets` (list_assets) for
-            // symbol/name - a balance with no matching entry still shows,
-            // under its bare asset id, rather than being dropped.
-            val assetsById = remember(assets) { assets.orEmpty().associateBy(AssetInfo::id) }
-            val issuedBalances = assetBalances.orEmpty().filter { it.asset != "lbtc" }
-            if (issuedBalances.isEmpty()) {
-                // Only once assetBalances has actually loaded (not null) -
-                // otherwise this flashes before the first fetch completes.
-                if (assetBalances != null) {
-                    Text(
-                        "No assets",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
-                        color = Tokens.Faint,
-                        modifier = Modifier.padding(top = 14.dp),
-                    )
-                }
-            } else {
-                issuedBalances.forEach { balance -> AssetBalanceCard(balance, assetsById[balance.asset], unit) }
             }
 
             // ── Recent activity ──
@@ -425,67 +401,218 @@ fun MainTab(
     }
 }
 
-/** One issued-asset balance card - same visual family as the Liquid/Lightning cards above, smaller. */
+/** "‹  L-BTC  ›" switcher above the cards, with page dots. */
 @Composable
-private fun AssetBalanceCard(balance: AssetBalance, info: AssetInfo?, unit: DisplayUnit) {
+private fun PagerHeader(
+    title: String, subtitle: String,
+    page: Int, pageCount: Int,
+    onPrev: () -> Unit, onNext: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PagerArrow(Icons.Filled.ChevronLeft, "Previous asset", enabled = page > 0, onClick = onPrev)
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            androidx.compose.animation.AnimatedContent(
+                targetState = title to subtitle,
+                transitionSpec = {
+                    androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) togetherWith
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
+                },
+                label = "pagerTitle",
+            ) { (t, sub) ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(t, style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp), maxLines = 1)
+                    Text(
+                        sub,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                        color = Tokens.Dim, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (pageCount > 1) {
+                Row(
+                    modifier = Modifier.padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    repeat(pageCount) { i ->
+                        val on = i == page
+                        val w by androidx.compose.animation.core.animateDpAsState(if (on) 16.dp else 6.dp, label = "dotW")
+                        val c by androidx.compose.animation.animateColorAsState(
+                            if (on) Tokens.Accent else Tokens.Faint.copy(alpha = .5f), label = "dotC",
+                        )
+                        Box(Modifier.height(6.dp).width(w).background(c, RoundedCornerShape(999.dp)))
+                    }
+                }
+            }
+        }
+        PagerArrow(Icons.Filled.ChevronRight, "Next asset", enabled = page < pageCount - 1, onClick = onNext)
+    }
+}
+
+@Composable
+private fun PagerArrow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val alpha by androidx.compose.animation.core.animateFloatAsState(if (enabled) 1f else .3f, label = "arrowAlpha")
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .alpha(alpha)
+            .background(Color(0x0FFFFFFF), CircleShape)
+            .border(1.dp, Tokens.BorderSoft, CircleShape)
+            .noRipple(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = if (enabled) Tokens.Accent else Tokens.Dim, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun OnchainCard(
+    title: String,
+    badge: @Composable () -> Unit,
+    badgeColor: Color,
+    amount: String,
+    unitLabel: String,
+    worth: String?,
+    onReceive: () -> Unit,
+    onSend: (() -> Unit)?,
+    onMore: () -> Unit,
+    amountColor: Color = Tokens.Text,
+    priceLine: String? = null,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 14.dp)
-            .background(Color(0xFF151A14), RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF141B23), Color(0xFF10161C))),
+                RoundedCornerShape(20.dp),
+            )
             .border(1.dp, Tokens.Border, RoundedCornerShape(20.dp))
             .padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.size(22.dp).background(Tokens.Green, CircleShape), contentAlignment = Alignment.Center) {
-                Text(
-                    (info?.symbol ?: balance.asset).take(1).uppercase(),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
-                    color = Color.White,
-                )
-            }
-            Text(
-                info?.name ?: info?.symbol ?: shortId(balance.asset, 8),
-                style = MaterialTheme.typography.labelMedium,
-                color = Tokens.Label,
-                modifier = Modifier.weight(1f),
-            )
-            // Reference price from ember's price pairs, in whatever unit
-            // Settings has chosen - only when a pair prices this asset in L-BTC.
-            info?.price?.takeIf { it.fromAsset == "lbtc" }?.let { price ->
-                val perUnit = formatLbtcPerAssetUnit(price.ratePpm, unit)
-                val label = if (unit == DisplayUnit.SAT && perUnit == "1") "sat" else unit.label
-                Text(
-                    "1 ${info.symbol} = $perUnit $label",
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
-                    color = Tokens.Dim,
-                )
+            Box(Modifier.size(22.dp).background(badgeColor, CircleShape), contentAlignment = Alignment.Center) { badge() }
+            Text(title, style = MaterialTheme.typography.labelMedium, color = Tokens.Label, modifier = Modifier.weight(1f))
+            priceLine?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim)
             }
         }
         Box(Modifier.padding(top = 14.dp)) {
-            // Always "thousandths" (same arithmetic as DisplayUnit.SAT),
-            // never BTC-style /1e11 - that conversion is specific to
-            // bitcoin's own 8-decimal convention and would misrepresent
-            // any other issued asset's amount.
-            app.light.wallet.ui.BalanceText(
-                amount = formatAmount(balance.channelBalanceMsat + balance.onchainBalanceMsat, DisplayUnit.SAT),
-                unit = info?.symbol ?: balance.asset,
-                color = Tokens.Green,
-            )
+            app.light.wallet.ui.BalanceText(amount = amount, unit = unitLabel, color = amountColor)
         }
-        info?.price?.takeIf { it.fromAsset == "lbtc" }?.let { price ->
-            val total = balance.channelBalanceMsat + balance.onchainBalanceMsat
-            // Reference value only: an actual swap adds the pricing margin
-            // and fees on top (see the Pay sheet's own quote).
-            val worthMsat = (java.math.BigInteger.valueOf(total.toLong())
-                * java.math.BigInteger.valueOf(price.ratePpm.toLong())
-                / java.math.BigInteger.valueOf(1_000_000L)).toLong().toULong()
-            Text(
-                "≈ ${formatAmount(worthMsat, unit)} ${unit.label}",
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
-                color = Tokens.Dim,
-                modifier = Modifier.padding(top = 4.dp),
+        worth?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 4.dp))
+        }
+        Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SoftPillButton("Receive", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowDownward, onClick = onReceive)
+            if (onSend != null) {
+                SoftPillButton("Send", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowUpward, onClick = onSend)
+            }
+            MoreDot(onMore)
+        }
+    }
+}
+
+@Composable
+private fun LightningCard(
+    title: String,
+    channels: Int?,
+    amount: String,
+    unitLabel: String,
+    worth: String?,
+    nodeId: String?,
+    onCopyNodeId: () -> Unit,
+    onCreateInvoice: () -> Unit,
+    onPay: () -> Unit,
+    onMore: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF26200F), Color(0xFF181307))),
+                RoundedCornerShape(20.dp),
             )
+            .border(1.dp, Tokens.Accent.copy(alpha = .2f), RoundedCornerShape(20.dp))
+            .padding(20.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.size(22.dp).background(Tokens.Accent.copy(alpha = .15f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Bolt, null, tint = Tokens.Accent, modifier = Modifier.size(13.dp)) }
+            Text(title, style = MaterialTheme.typography.labelMedium, color = Tokens.Label)
+            Spacer(Modifier.weight(1f))
+            channels?.let {
+                Text("$it channels", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim)
+            }
+        }
+        Box(Modifier.padding(top = 14.dp)) {
+            app.light.wallet.ui.BalanceText(amount = amount, unit = unitLabel, color = Tokens.Accent)
+        }
+        worth?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 4.dp))
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp)
+                .height(1.dp)
+                .background(Tokens.Border),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp)
+                .noRipple(enabled = nodeId != null, onClick = onCopyNodeId),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Node ID",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                color = Tokens.Dim,
+            )
+            Text(
+                shortId(nodeId, 12),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = MonoFont),
+                color = Tokens.TextMid,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier.weight(1f),
+            )
+            if (nodeId != null) Icon(Icons.Outlined.ContentCopy, null, tint = Tokens.Accent, modifier = Modifier.size(12.dp))
+        }
+        Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .background(Tokens.Accent, RoundedCornerShape(999.dp))
+                    .noRipple(onClick = onCreateInvoice),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Create invoice",
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.5.sp),
+                    color = Tokens.AccentInk,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            }
+            SoftPillButton("Pay invoice", modifier = Modifier.weight(1f), onClick = onPay)
+            MoreDot(onMore)
         }
     }
 }

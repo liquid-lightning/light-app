@@ -6,9 +6,11 @@ import app.light.wallet.core.PeerChannel
 
 /** Every bottom sheet in the app, mirroring the design's sheet layer. */
 sealed interface WalletSheet {
-    data object Receive : WalletSheet                       // on-chain newaddr + QR
+    /** On-chain newaddr + QR. A Liquid address takes any asset; [assetSymbol] only changes the title. */
+    data class Receive(val assetSymbol: String? = null) : WalletSheet
     data object SendChain : WalletSheet                     // on-chain withdraw
-    data object NewInvoice : WalletSheet                    // invoice creation
+    /** Invoice creation; [assetId] preselects an issued asset (null = L-BTC). */
+    data class NewInvoice(val assetId: String? = null) : WalletSheet
     /**
      * [wrapped] is non-null for an asset invoice (a self-contained string
      * carrying the asset it requires, since BOLT11 has none) - share/scan

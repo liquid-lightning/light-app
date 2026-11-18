@@ -158,7 +158,7 @@ fun InvoicesTab(
                 modifier = Modifier.weight(1f),
                 height = 50,
             ) {
-                onOpenSheet(if (segment == 0) WalletSheet.NewInvoice else WalletSheet.Pay())
+                onOpenSheet(if (segment == 0) WalletSheet.NewInvoice() else WalletSheet.Pay())
             }
             if (segment == 1) {
                 app.light.wallet.ui.OutlinePillButton(

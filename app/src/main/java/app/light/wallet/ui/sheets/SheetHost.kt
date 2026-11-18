@@ -119,9 +119,9 @@ fun SheetHost(
                 .padding(top = 14.dp, bottom = 40.dp),
         ) {
             when (sheet) {
-                is WalletSheet.Receive -> ReceiveSheet(repository, onClose)
+                is WalletSheet.Receive -> ReceiveSheet(repository, sheet.assetSymbol, onClose)
                 is WalletSheet.SendChain -> SendChainSheet(repository, onClose)
-                is WalletSheet.NewInvoice -> NewInvoiceSheet(repository, onOpenSheet, onClose)
+                is WalletSheet.NewInvoice -> NewInvoiceSheet(repository, sheet.assetId, onOpenSheet, onClose)
                 is WalletSheet.NewInvoiceResult -> InvoiceResultSheet(sheet, onClose)
                 is WalletSheet.Pay -> PaySheet(repository, sheet.prefill, onPaymentStarted, onClose)
                 is WalletSheet.OpenChannel -> OpenChannelSheet(repository, onClose)
@@ -208,7 +208,7 @@ private fun DesignField(
             big -> TextStyle(fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, color = Tokens.Text)
             mono -> TextStyle(fontFamily = MonoFont, fontSize = 12.sp, color = Tokens.TextMid, lineHeight = 18.sp)
             else -> TextStyle(fontFamily = MaterialTheme.typography.bodyLarge.fontFamily, fontSize = 14.sp, color = Tokens.Text)
-        },
+        }.let { if (enabled) it else it.copy(color = Tokens.Faint) },
         shape = RoundedCornerShape(13.dp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedContainerColor = Tokens.CardDeep,
@@ -216,6 +216,11 @@ private fun DesignField(
             focusedBorderColor = Tokens.Accent,
             unfocusedBorderColor = Color(0x17FFFFFF),
             cursorColor = Tokens.Accent,
+            // Locked fields (e.g. the swap-service peer) read as read-only:
+            // flatter grey fill, faint border and text.
+            disabledContainerColor = Color(0x0AFFFFFF),
+            disabledBorderColor = Color(0x0DFFFFFF),
+            disabledTextColor = Tokens.Faint,
         ),
         modifier = Modifier.fillMaxWidth(),
     )
@@ -236,7 +241,7 @@ private fun QrBox(data: String, sizeDp: Int = 188) {
 // ─────────────────────────── Receive (on-chain) ───────────────────────────
 
 @Composable
-private fun ReceiveSheet(repository: WalletRepository, onClose: () -> Unit) {
+private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var address by remember { mutableStateOf<String?>(null) }
@@ -252,7 +257,7 @@ private fun ReceiveSheet(repository: WalletRepository, onClose: () -> Unit) {
 
     androidx.compose.runtime.LaunchedEffect(Unit) { generate() }
 
-    SheetTitle("Receive L-BTC", onClose)
+    SheetTitle("Receive ${assetSymbol ?: "L-BTC"}", onClose)
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -404,12 +409,26 @@ private fun AssetPill(label: String, selected: Boolean, onClick: () -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit, onClose: () -> Unit) {
+private fun NewInvoiceSheet(
+    repository: WalletRepository,
+    initialAssetId: String?,
+    onOpenSheet: (WalletSheet) -> Unit,
+    onClose: () -> Unit,
+) {
     val unit = DisplayUnit.from(repository.displayUnit)
     val scope = rememberCoroutineScope()
     val availableAssets by repository.assets.collectAsState()
     // null = this node's own native coin (a plain invoice via createInvoice).
-    var selectedAsset by remember { mutableStateOf<app.light.wallet.core.AssetInfo?>(null) }
+    var selectedAsset by remember {
+        mutableStateOf(availableAssets?.firstOrNull { it.id == initialAssetId })
+    }
+    // Opened from an asset page before list_assets arrived: preselect once it does.
+    var preselected by remember { mutableStateOf(selectedAsset != null || initialAssetId == null) }
+    androidx.compose.runtime.LaunchedEffect(availableAssets) {
+        if (!preselected) availableAssets?.firstOrNull { it.id == initialAssetId }?.let {
+            selectedAsset = it; preselected = true
+        }
+    }
     var anyAmount by remember { mutableStateOf(false) }
     var amount by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
@@ -437,9 +456,9 @@ private fun NewInvoiceSheet(repository: WalletRepository, onOpenSheet: (WalletSh
             // "any amount" only makes sense for a plain invoice - an
             // asset invoice's amount_msat is required (assetinvoice.rs
             // has no AmountOrAny handling the way plain invoice does).
-            AssetPill("L-BTC", selectedAsset == null) { selectedAsset = null; anyAmount = false }
+            AssetPill("L-BTC", selectedAsset == null) { selectedAsset = null; anyAmount = false; preselected = true }
             availableAssets.orEmpty().forEach { a ->
-                AssetPill(a.symbol, selectedAsset?.id == a.id) { selectedAsset = a; anyAmount = false }
+                AssetPill(a.symbol, selectedAsset?.id == a.id) { selectedAsset = a; anyAmount = false; preselected = true }
             }
         }
     }
@@ -1114,14 +1133,14 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
             .padding(bottom = 10.dp)
             .noRipple(enabled = swapService != null) {
                 useSwapService = !useSwapService
-                peer = if (useSwapService) "${swapService?.nodeId}@${swapService?.addr}" else ""
+                peer = ""
             },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         app.light.wallet.ui.DesignSwitch(checked = useSwapService, enabled = swapService != null) {
             useSwapService = !useSwapService
-            peer = if (useSwapService) "${swapService?.nodeId}@${swapService?.addr}" else ""
+            peer = ""
         }
         Column {
             Text("Connect to swap service", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp), color = Tokens.TextMid)
@@ -1131,8 +1150,14 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
             )
         }
     }
-    FieldLabel("Peer connect string")
-    DesignField(peer, { peer = it }, "nodeid@host:port", mono = true, lines = 2, enabled = !useSwapService)
+    // With the swap service on, the field only shows its node id (locked);
+    // the host:port is filled in behind the scenes when connecting.
+    val swapPeer = swapService?.takeIf { useSwapService }
+    FieldLabel(if (swapPeer != null) "Peer node ID" else "Peer connect string")
+    DesignField(
+        swapPeer?.nodeId ?: peer, { if (swapPeer == null) peer = it },
+        "nodeid@host:port", mono = true, lines = 2, enabled = swapPeer == null,
+    )
     Row(modifier = Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Amount (${unit.label})", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)
@@ -1166,19 +1191,20 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
     PillButton(
         if (busy) "Opening…" else "Connect & fund channel",
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-        enabled = !busy && peer.isNotBlank() && parseAmountToMsat(amount, unit) != null,
+        enabled = !busy && (swapPeer != null || peer.isNotBlank()) && parseAmountToMsat(amount, unit) != null,
     ) {
         busy = true; error = null
+        val connectString = swapPeer?.let { "${it.nodeId}@${it.addr}" } ?: peer
         scope.launch {
             runCatching {
                 val node = repository.requireNode()
-                val nodeId = if ("@" in peer) {
-                    val (id, hostPort) = peer.trim().split("@", limit = 2)
+                val nodeId = if ("@" in connectString) {
+                    val (id, hostPort) = connectString.trim().split("@", limit = 2)
                     val host = hostPort.substringBeforeLast(":")
                     val port = hostPort.substringAfterLast(":").toUIntOrNull()
                     node.connectPeer(id.trim(), host, port)
                     id.trim()
-                } else peer.trim()
+                } else connectString.trim()
                 node.openChannel(
                     OpenChannelParams(
                         peerId = nodeId, amountSat = (parseAmountToMsat(amount, unit) ?: 0uL) / 1000uL, all = false,

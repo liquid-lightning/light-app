@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy Policy — LightApp</title>
-<meta name="description" content="LightApp collects no personal data. What the app stores on your device, what Blockstream Greenlight can see, and what leaves your phone.">
+<title>Privacy Policy — LiqhtApp</title>
+<meta name="description" content="LiqhtApp is custodial: your recovery phrase goes to the ember server that runs your node. What the app stores on your device, what that server can see and do, and what leaves your phone.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400&display=swap">
@@ -121,24 +121,24 @@
         <path d="M555,225L324,571.5L475.8,571.5L436.2,819Z" fill="#FFE45E"/>
         <path d="M555,225L436.2,819L720,472.5L551.7,472.5Z" fill="#EAB308"/>
       </svg>
-      <span>LightApp</span>
+      <span>LiqhtApp</span>
     </div>
     <h1>Privacy Policy</h1>
-    <p class="dateline">Effective 21 August 2026 &middot; applies to <strong>LightApp</strong> for Android (<code>app.light.wallet</code>)</p>
+    <p class="dateline">Effective 18 November 2026 &middot; applies to <strong>LiqhtApp</strong> for Android (<code>app.light.wallet</code>)</p>
   </header>
 
   <div class="tldr">
     <h2>The short version</h2>
-    <p>LightApp collects <strong>nothing</strong>. There are no accounts, no analytics, no crash reporting, no advertising and no servers operated by us. Nobody is watching what you do in the app.</p>
-    <p>Your recovery phrase and credentials are encrypted and stay on your phone. The one party that sees anything is <strong>Blockstream Greenlight</strong>, which runs your Lightning node — and it can never move your funds, because signing happens on your device.</p>
+    <p>LiqhtApp itself collects <strong>nothing</strong> for analytics: no accounts, no tracking, no crash reporting and no advertising.</p>
+    <p>Your Lightning node runs on an <strong>ember</strong> server, and LiqhtApp is <strong>custodial</strong>. When you create or restore a wallet, your recovery phrase is sent to that server, which derives your node's keys from it. Whoever operates the server can see your node's activity and <strong>can spend its funds</strong>.</p>
   </div>
 
   <h2 class="sec">1. Who is responsible</h2>
-  <p>LightApp is a free, open-source project maintained by an individual developer. There is no company behind it, no backend of ours, and no database anywhere holding information about you.</p>
-  <p>Because the app collects no personal data, there is no data controller in the usual sense. Where this policy describes information leaving your device, it is going to a third party you are choosing to use — never to us.</p>
+  <p>LiqhtApp is a free, open-source app. Each build is configured to connect to one <a href="https://github.com/liquid-lightning/ember">ember</a> server, which runs your Lightning node. The operator of that server holds your node's keys and the information described in section 5, and is responsible for it.</p>
+  <p>The app sends nothing anywhere else on its own: no analytics, telemetry or advertising services.</p>
 
   <h2 class="sec">2. Data we collect</h2>
-  <p><span class="none">None.</span> To be specific, LightApp does not collect, transmit or store:</p>
+  <p><span class="none">None.</span> To be specific, LiqhtApp does not collect, transmit or store:</p>
   <ul>
     <li>Names, email addresses, phone numbers or any account identifiers — the app has no sign-up</li>
     <li>Analytics, usage statistics, event tracking or performance telemetry</li>
@@ -146,14 +146,14 @@
     <li>Advertising identifiers; the app contains no ads and no advertising SDKs</li>
     <li>Contacts, photos, files, camera, microphone or location data — none of these permissions are requested</li>
   </ul>
-  <p>The app declares exactly one Android permission: <code>INTERNET</code>, needed to reach your Lightning node.</p>
+  <p>The app declares exactly one Android permission: <code>INTERNET</code>, needed to reach the ember server and your node.</p>
 
   <h2 class="sec">3. What is stored on your device</h2>
-  <p>Everything sensitive stays local. The following never leaves your phone unless you deliberately export it:</p>
+  <p>The app keeps the following on your phone:</p>
   <ul>
-    <li><strong>Your recovery phrase</strong> — the 24-word BIP39 seed that controls your funds</li>
-    <li><strong>Greenlight credentials</strong> — the developer certificate and key you upload, and the device credentials issued when your node is registered</li>
-    <li><strong>Preferences</strong> — your display unit choice, which is not sensitive and is stored in plain app storage</li>
+    <li><strong>Your recovery phrase</strong>: the 24-word BIP39 seed that controls your funds. A copy is also sent to the ember server once, when you create or restore the wallet (see section 5)</li>
+    <li><strong>Device certificate</strong>: the credential the ember server issues to this phone when your node is registered or recovered, used to authenticate every later connection</li>
+    <li><strong>Preferences</strong>: your display unit and network, which are not sensitive and are stored in plain app storage</li>
   </ul>
 
   <h3>How it is protected</h3>
@@ -165,21 +165,20 @@
     <li>Copying your seed or private key marks the clipboard entry sensitive and clears it automatically after 60 seconds</li>
     <li>Release builds emit no logs</li>
   </ul>
-  <p>Uninstalling LightApp, or using <strong>Delete wallet data</strong> in Settings, erases all of this from the device. Neither action affects your node, and neither is recoverable without your recovery phrase — keep it written down offline.</p>
+  <p>Uninstalling LiqhtApp, or using <strong>Delete wallet data</strong> in Settings, erases all of this from the device. Neither action affects your node or what the ember server holds, and neither is recoverable without your recovery phrase — keep it written down offline.</p>
 
-  <h2 class="sec">4. Third parties your phone connects to</h2>
-  <p>LightApp talks to services you choose to use. We receive nothing from any of them.</p>
+  <h2 class="sec">4. Services your phone connects to</h2>
   <div class="tablewrap">
     <table>
       <thead><tr><th>Service</th><th>When</th><th>What it can see</th></tr></thead>
       <tbody>
         <tr>
-          <td>Blockstream Greenlight</td>
-          <td>Whenever the app is open and your node is running</td>
-          <td>Your node's activity and your IP address — see section 5</td>
+          <td>The ember server this build connects to</td>
+          <td>When you create or restore a wallet, and whenever the app is open</td>
+          <td>Your recovery phrase (once), your node's activity and keys, and your IP address — see section 5</td>
         </tr>
         <tr>
-          <td>mempool.space</td>
+          <td>Blockstream's Liquid explorer (blockstream.info)</td>
           <td>Only if you tap a transaction or output to view it</td>
           <td>The transaction ID you opened and your IP address</td>
         </tr>
@@ -193,29 +192,29 @@
   </div>
   <p>The last two open in your browser and are governed by those services' own privacy policies.</p>
 
-  <h2 class="sec">5. What Greenlight can see</h2>
-  <p>This is the most important thing to understand about using LightApp, so it is stated plainly.</p>
-  <p>Your Lightning node runs on <a href="https://blockstream.com/lightning/greenlight/">Blockstream Greenlight</a>'s infrastructure. The app connects to it over an authenticated, encrypted connection using the credentials you supply. In the course of running your node, Greenlight can observe:</p>
+  <h2 class="sec">5. What the ember server can see and do</h2>
+  <p>This is the most important thing to understand about using LiqhtApp, so it is stated plainly.</p>
+  <p>When you create or restore a wallet, the app sends your recovery phrase to the ember server over an encrypted, mutually authenticated connection. The server derives your node's signing keys from it and runs your Core Lightning node on its own infrastructure. Its operator can therefore:</p>
   <ul>
-    <li>Your node's identity and the fact that it is online</li>
-    <li>Your channels, balances and the payments your node sends, receives and forwards</li>
-    <li>The IP address your phone connects from</li>
+    <li><strong>Spend your node's funds.</strong> The node's keys exist on the server, not only on your phone. LiqhtApp is custodial.</li>
+    <li>See your node's identity and the fact that it is online</li>
+    <li>See your channels, balances, asset holdings and the payments your node sends, receives and forwards</li>
+    <li>See the IP address your phone connects from</li>
   </ul>
-  <p><strong>What Greenlight cannot do is spend your money.</strong> Your keys are never uploaded. Every operation requiring a signature is sent to the signer running inside the app on your phone, which approves it locally. This is the core design of Greenlight and the reason LightApp is non-custodial.</p>
-  <p>Greenlight's handling of this information is covered by <a href="https://blockstream.com/privacy-policy/">Blockstream's privacy policy</a>. If you are not comfortable with a third party observing your node's activity, this app is not the right tool for you.</p>
+  <p>Only use LiqhtApp with a server operator you trust, and only with amounts you are prepared to entrust to them. If you are not comfortable with that, this app is not the right tool for you.</p>
 
-  <h2 class="sec">6. Bitcoin and Lightning are public networks</h2>
-  <p>Independently of this app: on-chain Bitcoin transactions are recorded permanently on a public blockchain and can be examined by anyone. Lightning payments are more private, but routing nodes necessarily learn about the payments they forward. LightApp cannot change either of these properties, and no privacy policy can.</p>
+  <h2 class="sec">6. Liquid and Lightning are public networks</h2>
+  <p>Independently of this app: Liquid transactions are recorded permanently on a public blockchain (amounts and asset types are confidential, but transactions and addresses are not). Lightning payments are more private, but routing nodes necessarily learn about the payments they forward. LiqhtApp cannot change either of these properties, and no privacy policy can.</p>
 
   <h2 class="sec">7. Children</h2>
-  <p>LightApp is not directed at children and is not intended for anyone under 18. We knowingly collect no data from anyone, children included.</p>
+  <p>LiqhtApp is not directed at children and is not intended for anyone under 18.</p>
 
   <h2 class="sec">8. Your rights</h2>
   <p>Privacy regulations such as the GDPR and CCPA give you rights to access, correct, export and delete personal data held about you, and to object to its processing.</p>
-  <p>We hold no personal data about you, so there is nothing to disclose, correct, export or erase, and no sale or sharing of personal information takes place — LightApp has never sold or shared any, because it has none. Data on your own device is under your sole control and can be erased at any time from Settings or by uninstalling the app.</p>
+  <p>The app itself sends no personal data to anyone other than the ember server. Requests about what that server holds go to its operator. Data on your own device is under your sole control and can be erased at any time from Settings or by uninstalling the app.</p>
 
   <h2 class="sec">9. Security disclosure</h2>
-  <p>LightApp handles real funds and has not undergone a third-party security audit. If you find a vulnerability, please report it privately through the repository rather than opening a public issue, so it can be fixed before it is disclosed.</p>
+  <p>LiqhtApp handles real funds and has not undergone a third-party security audit. If you find a vulnerability, please report it privately through the repository rather than opening a public issue, so it can be fixed before it is disclosed.</p>
 
   <h2 class="sec">10. Changes to this policy</h2>
   <p>If this policy changes, the revised version will be published at this address with a new effective date. Because the app's source is public, changes to what it actually does are visible in the commit history as well.</p>
@@ -224,7 +223,7 @@
   <p>Questions about this policy or the app can be raised at <a href="https://github.com/liquid-lightning/light-app/issues">github.com/liquid-lightning/light-app/issues</a>.</p>
 
   <footer>
-    <p>LightApp is free software released under the MIT licence. Source: <a href="https://github.com/liquid-lightning/light-app">github.com/liquid-lightning/light-app</a></p>
+    <p>LiqhtApp is free software released under the MIT licence. Source: <a href="https://github.com/liquid-lightning/light-app">github.com/liquid-lightning/light-app</a></p>
     <p>Based on <a href="https://github.com/olegfomenko/light-app">olegfomenko/light-app</a>.</p>
   </footer>
 

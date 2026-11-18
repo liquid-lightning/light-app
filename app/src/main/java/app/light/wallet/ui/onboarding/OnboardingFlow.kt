@@ -245,7 +245,7 @@ private fun CreateWallet(
     SecureScreen()
     Text("Your recovery phrase", style = MaterialTheme.typography.headlineSmall)
     Text(
-        "This BIP39 seed derives your node identity and on-chain keys. Write the ${mnemonic.split(" ").size} words down, in order, on paper.",
+        "This BIP39 seed is your wallet: the ember server derives your node's keys from it. Write the ${mnemonic.split(" ").size} words down, in order, on paper.",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp, lineHeight = 21.sp),
         color = Tokens.Label, modifier = Modifier.padding(top = 8.dp, bottom = 20.dp),
     )
@@ -255,7 +255,7 @@ private fun CreateWallet(
         onReveal = { revealed = true },
     )
     Text(
-        "Write these words down — they are the only way to recover your wallet. They never leave this device.",
+        "Write these words down — they are the only way to recover your wallet. They are sent to the ember server once, to set up your node, and anyone who has them can spend your funds.",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.5.sp, lineHeight = 20.sp),
         color = Tokens.TextMid, modifier = Modifier.padding(top = 14.dp),
     )

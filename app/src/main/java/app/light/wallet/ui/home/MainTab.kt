@@ -191,7 +191,7 @@ fun MainTab(
                         .clip(RoundedCornerShape(9.dp)),
                 )
                 Text(
-                    "LightApp",
+                    "LiqhtApp",
                     style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                     modifier = Modifier.weight(1f),
                 )

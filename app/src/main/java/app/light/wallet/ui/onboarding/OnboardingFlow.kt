@@ -106,7 +106,7 @@ fun OnboardingFlow(repository: WalletRepository, onDone: () -> Unit) {
 private fun Logo(sizeDp: Int = 88, radius: Int = 22) {
     androidx.compose.foundation.Image(
         painter = androidx.compose.ui.res.painterResource(app.light.wallet.R.drawable.logo_lightapp),
-        contentDescription = "LightApp",
+        contentDescription = "LiqhtApp",
         modifier = Modifier
             .size(sizeDp.dp)
             .clip(RoundedCornerShape(radius.dp)),
@@ -161,9 +161,9 @@ private fun Welcome(onCreate: () -> Unit, onRestore: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Logo()
-        Text("LightApp", style = MaterialTheme.typography.headlineSmall.copy(fontSize = 34.sp))
+        Text("LiqhtApp", style = MaterialTheme.typography.headlineSmall.copy(fontSize = 34.sp))
         Text(
-            "A full Core Lightning node in your pocket, powered by ember. Built by Engineers for Engineers.",
+            "A full Core Lightning node in your pocket, powered by Ember. Built by Engineers for Engineers.",
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, lineHeight = 23.sp),
             color = Tokens.Label,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -174,7 +174,7 @@ private fun Welcome(onCreate: () -> Unit, onRestore: () -> Unit) {
         PillButton("Create new wallet", modifier = Modifier.fillMaxWidth(), height = 54) { onCreate() }
         GhostButton("Restore from seed", modifier = Modifier.fillMaxWidth()) { onRestore() }
         OpenSourceNote(
-            "LightApp is open source. We recommend double-checking the code at ",
+            "LiqhtApp is open source. We recommend double-checking the code at ",
             " before using the application.",
         )
     }

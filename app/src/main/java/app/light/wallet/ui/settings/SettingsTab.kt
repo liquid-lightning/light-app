@@ -150,7 +150,7 @@ fun SettingsTab(
         }
 
         Text(
-            "LightApp 0.1 · Core Lightning · ember",
+            "LiqhtApp 0.1 · Core Lightning · ember",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, fontFamily = MonoFont),
             color = Tokens.Faint,
             modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),

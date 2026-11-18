@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot setup + build + run for LightApp on macOS.
+# One-shot setup + build + run for LiqhtApp on macOS.
 #
 #   ./scripts/bootstrap.sh          # configure, build rust + apk, run in emulator
 #   ./scripts/bootstrap.sh --build  # stop after building the APK (no emulator)
@@ -108,7 +108,7 @@ if ! adb devices | awk 'NR>1 && $2=="device"' | grep -q .; then
   echo " booted."
 fi
 
-step "Installing and launching LightApp"
+step "Installing and launching LiqhtApp"
 ./gradlew :app:installRelease
 adb shell am start -n app.light.wallet/.MainActivity
-step "LightApp is running in the emulator 🎉"
+step "LiqhtApp is running in the emulator 🎉"

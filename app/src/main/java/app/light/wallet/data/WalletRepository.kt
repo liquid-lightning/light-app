@@ -131,7 +131,7 @@ class WalletRepository(
                 } catch (c: CancellationException) {
                     throw c
                 } catch (e: Exception) {
-                    android.util.Log.w("LightApp", "refresh '$key' failed: ${e.message}")
+                    android.util.Log.w("LiqhtApp", "refresh '$key' failed: ${e.message}")
                 }
             }
             fetchJobs[key] = job

@@ -1,4 +1,4 @@
-//! lightcore — Rust core for LightApp.
+//! lightcore — Rust core for LiqhtApp.
 //!
 //! Wraps `ember-client` to drive a node provisioned by ember (an in-house
 //! custodial Core Lightning provisioning service) and exposes a

@@ -115,6 +115,29 @@ fun SettingsTab(
         }
         Text(
             androidx.compose.ui.text.buildAnnotatedString {
+                append("Github repo: ")
+                withStyle(
+                    androidx.compose.ui.text.SpanStyle(
+                        color = Tokens.Accent, fontWeight = FontWeight.Bold,
+                        fontFamily = app.light.wallet.ui.theme.MonoFont,
+                    ),
+                ) { append("github.com/liquid-lightning/light-app") }
+            },
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+            color = Tokens.Faint,
+            modifier = Modifier
+                .padding(start = 4.dp, top = 8.dp)
+                .noRipple {
+                    context.startActivity(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/liquid-lightning/light-app"),
+                        ),
+                    )
+                },
+        )
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
                 append("Based on ")
                 withStyle(
                     androidx.compose.ui.text.SpanStyle(
@@ -126,7 +149,7 @@ fun SettingsTab(
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
             color = Tokens.Faint,
             modifier = Modifier
-                .padding(start = 4.dp, top = 8.dp)
+                .padding(start = 4.dp, top = 4.dp)
                 .noRipple {
                     context.startActivity(
                         android.content.Intent(

@@ -336,6 +336,7 @@ fun MainTab(
                             // sends are L-BTC only for now.
                             onSend = null,
                             onMore = onGoTransactions,
+                            assetId = assetId,
                         )
                         LightningCard(
                             title = "Lightning · $symbol",
@@ -487,7 +488,9 @@ private fun OnchainCard(
     onMore: () -> Unit,
     amountColor: Color = Tokens.Text,
     priceLine: String? = null,
+    assetId: String? = null,
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -510,6 +513,40 @@ private fun OnchainCard(
         }
         worth?.let {
             Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 4.dp))
+        }
+        // Issued assets: the id, shortened to its start…end; tap copies it whole.
+        assetId?.let { id ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp)
+                    .height(1.dp)
+                    .background(Tokens.Border),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .noRipple { copyToClipboard(context, "Asset ID", id) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Asset ID",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                    color = Tokens.Dim,
+                )
+                Text(
+                    shortId(id, 8),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = MonoFont),
+                    color = Tokens.TextMid,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(Icons.Outlined.ContentCopy, null, tint = Tokens.Accent, modifier = Modifier.size(12.dp))
+            }
         }
         Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SoftPillButton("Receive", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowDownward, onClick = onReceive)

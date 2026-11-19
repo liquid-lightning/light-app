@@ -6,9 +6,17 @@ import app.light.wallet.core.PeerChannel
 
 /** Every bottom sheet in the app, mirroring the design's sheet layer. */
 sealed interface WalletSheet {
-    /** On-chain newaddr + QR. A Liquid address takes any asset; [assetSymbol] only changes the title. */
-    data class Receive(val assetSymbol: String? = null) : WalletSheet
+    /**
+     * On-chain address + QR. L-BTC ([assetId] null) goes to CLN's wallet
+     * (newaddr); an issued asset to the node's asset wallet - CLN's own
+     * wallet ignores every non-L-BTC output.
+     */
+    data class Receive(val assetSymbol: String? = null, val assetId: String? = null) : WalletSheet
     data object SendChain : WalletSheet                     // on-chain withdraw
+    /** On-chain send of an issued asset from the asset wallet. */
+    data class SendAsset(val assetId: String, val symbol: String) : WalletSheet
+    /** Move L-BTC from CLN's wallet into the asset wallet, to pay asset fees. */
+    data object TopUpAssetWallet : WalletSheet
     /** Invoice creation; [assetId] preselects an issued asset (null = L-BTC). */
     data class NewInvoice(val assetId: String? = null) : WalletSheet
     /**
@@ -23,7 +31,8 @@ sealed interface WalletSheet {
         val wrapped: String? = null,
     ) : WalletSheet
     data class Pay(val prefill: String = "") : WalletSheet  // xpay
-    data object OpenChannel : WalletSheet
+    /** [assetId] preselects an asset channel funded from the asset wallet (null = L-BTC). */
+    data class OpenChannel(val assetId: String? = null) : WalletSheet
     data class InvoiceDetail(val invoice: InvoiceEntry) : WalletSheet
     data class PaymentDetail(val pay: PayListEntry) : WalletSheet
     data class ActivePaymentDetail(val paymentId: Long) : WalletSheet

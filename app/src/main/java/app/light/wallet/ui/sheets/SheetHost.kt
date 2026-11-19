@@ -62,7 +62,13 @@ import app.light.wallet.ui.SoftPillButton
 import app.light.wallet.ui.DisplayUnit
 import app.light.wallet.ui.copyToClipboard
 import app.light.wallet.ui.expiresIn
+import app.light.wallet.ui.DEFAULT_ASSET_PRECISION
+import app.light.wallet.ui.assetPrecisionOf
+import app.light.wallet.ui.assetSymbolOf
+import app.light.wallet.ui.filterAssetAmountInput
 import app.light.wallet.ui.formatAmount
+import app.light.wallet.ui.formatAssetUnits
+import app.light.wallet.ui.parseAssetAmountToMsat
 import app.light.wallet.ui.filterAmountInput
 import app.light.wallet.ui.formatAmountFull
 import app.light.wallet.ui.parseAmountToMsat
@@ -119,12 +125,14 @@ fun SheetHost(
                 .padding(top = 14.dp, bottom = 40.dp),
         ) {
             when (sheet) {
-                is WalletSheet.Receive -> ReceiveSheet(repository, sheet.assetSymbol, onClose)
+                is WalletSheet.Receive -> ReceiveSheet(repository, sheet.assetSymbol, sheet.assetId, onClose)
                 is WalletSheet.SendChain -> SendChainSheet(repository, onClose)
+                is WalletSheet.SendAsset -> SendAssetSheet(repository, sheet, onOpenSheet, onClose)
+                is WalletSheet.TopUpAssetWallet -> TopUpAssetWalletSheet(repository, onClose)
                 is WalletSheet.NewInvoice -> NewInvoiceSheet(repository, sheet.assetId, onOpenSheet, onClose)
                 is WalletSheet.NewInvoiceResult -> InvoiceResultSheet(sheet, onClose)
                 is WalletSheet.Pay -> PaySheet(repository, sheet.prefill, onPaymentStarted, onClose)
-                is WalletSheet.OpenChannel -> OpenChannelSheet(repository, onClose)
+                is WalletSheet.OpenChannel -> OpenChannelSheet(repository, sheet.assetId, onOpenSheet, onClose)
                 is WalletSheet.InvoiceDetail -> InvoiceDetailSheet(repository, sheet, onClose)
                 is WalletSheet.PaymentDetail -> PaymentDetailSheet(repository, sheet, onClose)
                 is WalletSheet.ActivePaymentDetail -> ActivePaymentSheet(repository, sheet.paymentId, onClose)
@@ -241,7 +249,7 @@ private fun QrBox(data: String, sizeDp: Int = 188) {
 // ─────────────────────────── Receive (on-chain) ───────────────────────────
 
 @Composable
-private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, onClose: () -> Unit) {
+private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, assetId: String?, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var address by remember { mutableStateOf<String?>(null) }
@@ -249,8 +257,13 @@ private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, onC
 
     fun generate() {
         scope.launch {
-            runCatching { repository.requireNode().newAddress("bech32") }
-                .onSuccess { address = it.bech32 }
+            // An issued asset goes to the asset wallet: CLN's own wallet
+            // (newaddr) ignores every non-L-BTC output.
+            runCatching {
+                if (assetId != null) repository.newAssetAddress()
+                else repository.requireNode().newAddress("bech32").bech32
+            }
+                .onSuccess { address = it }
                 .onFailure { error = it.message }
         }
     }
@@ -290,7 +303,8 @@ private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, onC
                 copyToClipboard(context, "Address", addr)
             }
             Text(
-                "bech32 · newaddr · a fresh address is generated after each use",
+                if (assetId != null) "Asset wallet address · receives any issued asset; L-BTC sent here tops up its fee balance"
+                else "bech32 · newaddr · a fresh address is generated after each use",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
                 color = Tokens.Faint,
             )
@@ -445,6 +459,11 @@ private fun NewInvoiceSheet(
     var exposeScids by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // An asset invoice's amount is typed in whole asset units ("0.5"),
+    // not the L-BTC display unit.
+    val assetPrecision = selectedAsset?.precision?.toInt() ?: DEFAULT_ASSET_PRECISION
+    fun parsedAmountMsat(): ULong? =
+        if (selectedAsset != null) parseAssetAmountToMsat(amount, assetPrecision) else parseAmountToMsat(amount, unit)
 
     SheetTitle("Create invoice", onClose)
     if (!availableAssets.isNullOrEmpty()) {
@@ -456,15 +475,15 @@ private fun NewInvoiceSheet(
             // "any amount" only makes sense for a plain invoice - an
             // asset invoice's amount_msat is required (assetinvoice.rs
             // has no AmountOrAny handling the way plain invoice does).
-            AssetPill("L-BTC", selectedAsset == null) { selectedAsset = null; anyAmount = false; preselected = true }
+            AssetPill("L-BTC", selectedAsset == null) { selectedAsset = null; anyAmount = false; preselected = true; amount = "" }
             availableAssets.orEmpty().forEach { a ->
-                AssetPill(a.symbol, selectedAsset?.id == a.id) { selectedAsset = a; anyAmount = false; preselected = true }
+                AssetPill(a.symbol, selectedAsset?.id == a.id) { selectedAsset = a; anyAmount = false; preselected = true; amount = "" }
             }
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = if (availableAssets.isNullOrEmpty()) 0.dp else 14.dp)) {
         Text(
-            "Amount (${unit.label})",
+            "Amount (${selectedAsset?.symbol ?: unit.label})",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold),
             color = Tokens.Dim, modifier = Modifier.weight(1f),
         )
@@ -484,8 +503,10 @@ private fun NewInvoiceSheet(
     if (!anyAmount) {
         Box(Modifier.padding(top = 8.dp)) {
             DesignField(
-                amount, { amount = filterAmountInput(it, unit) },
-                when (unit) {
+                amount, {
+                    amount = if (selectedAsset != null) filterAssetAmountInput(it, assetPrecision) else filterAmountInput(it, unit)
+                },
+                if (selectedAsset != null) "0.5" else when (unit) {
                     DisplayUnit.SAT -> "25 000"
                     DisplayUnit.MSAT -> "25 000 000"
                     DisplayUnit.BTC -> "0.00025"
@@ -599,7 +620,7 @@ private fun NewInvoiceSheet(
     PillButton(
         if (busy) "Creating…" else "Create invoice",
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-        enabled = !busy && ((selectedAsset == null && anyAmount) || parseAmountToMsat(amount, unit) != null),
+        enabled = !busy && ((selectedAsset == null && anyAmount) || parsedAmountMsat() != null),
     ) {
         busy = true; error = null
         scope.launch {
@@ -608,7 +629,7 @@ private fun NewInvoiceSheet(
                 // assetinvoice has no "any amount" equivalent - the amount
                 // field is required (assetswap-plugin's own RPC takes a
                 // plain amount_msat, not CLN's AmountOrAny).
-                val amountMsat = parseAmountToMsat(amount, unit)
+                val amountMsat = parsedAmountMsat()
                 if (amountMsat == null) {
                     error = "amount is required for an asset invoice"
                     busy = false
@@ -726,6 +747,8 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
     fun symbolOf(id: String): String =
         availableAssets?.firstOrNull { it.id == id }?.symbol
             ?: if (id == "lbtc") "L-BTC" else id.take(8) + "…"
+    fun precisionOf(id: String): Int =
+        availableAssets?.firstOrNull { it.id == id }?.precision?.toInt() ?: DEFAULT_ASSET_PRECISION
 
     result?.let { r ->
         Column(
@@ -761,6 +784,7 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
         quoteError = quoteError,
         fromAsset = fromAsset?.id,
         symbolOf = ::symbolOf,
+        precisionOf = ::precisionOf,
     )
     error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
     PillButton(
@@ -806,13 +830,21 @@ private const val SWAP_ROUTING_FEE_BUDGET_DIVISOR = 100uL
 /** The tier payassetinvoice uses when the caller names none (pay.rs). */
 private const val DEFAULT_SWAP_TIER = "medium"
 
-/** "1 234 sats" for L-BTC, "1 234 TKNB" for any issued asset. */
-private fun formatAssetAmount(msat: ULong, assetId: String, symbol: String): String =
-    formatAmount(msat, DisplayUnit.SAT) + if (assetId == "lbtc") " sats" else " $symbol"
+/** "1 234 sats" for L-BTC, "0.5 USDt" (whole units, [precision] decimals) for any issued asset. */
+private fun formatAssetAmount(msat: ULong, assetId: String, symbol: String, precision: Int): String =
+    if (assetId == "lbtc") formatAmount(msat, DisplayUnit.SAT) + " sats"
+    else formatAssetUnits(msat, precision) + " $symbol"
 
-/** rate_ppm as a plain decimal: 1_500_000 -> "1.5". */
-private fun formatRate(ratePpm: ULong): String =
-    java.math.BigDecimal(ratePpm.toLong()).movePointLeft(6).stripTrailingZeros().toPlainString()
+/**
+ * Price of 1 whole `to` asset in the `from` asset's own display unit
+ * (sats for L-BTC, whole units otherwise). rate_ppm is msat-per-msat, so
+ * 1 whole `to` (10^toPrecision base units) costs
+ * rate_ppm * 10^toPrecision / 1e6 from-base-units; kept exact.
+ */
+private fun formatRate(ratePpm: ULong, toPrecision: Int, fromPrecision: Int): String =
+    java.math.BigDecimal(ratePpm.toLong())
+        .movePointLeft(6 - toPrecision + fromPrecision)
+        .stripTrailingZeros().toPlainString()
 
 /**
  * The invoice's amount, the asset's reference price (when ember has a pair
@@ -827,7 +859,10 @@ private fun AssetPayPreview(
     quoteError: String?,
     fromAsset: String?,
     symbolOf: (String) -> String,
+    precisionOf: (String) -> Int,
 ): Boolean {
+    fun formatAssetAmount(msat: ULong, assetId: String, symbol: String) =
+        formatAssetAmount(msat, assetId, symbol, precisionOf(assetId))
     if (invoice == null) return true // unreadable wrapper: let the server decide
     val toSym = symbolOf(invoice.asset)
     val swapTier = quote?.tiers?.firstOrNull { it.name == DEFAULT_SWAP_TIER }
@@ -849,7 +884,9 @@ private fun AssetPayPreview(
         if (quote != null && invoice.asset != "lbtc") {
             val fromSym = symbolOf(quote.fromAsset)
             val fee = if (quote.feeBaseMsat > 0uL) " + ${formatAssetAmount(quote.feeBaseMsat, quote.fromAsset, fromSym)} fee" else ""
-            Row2("Price", "1 $toSym = ${formatRate(quote.ratePpm)} ${if (quote.fromAsset == "lbtc") "sat L-BTC" else fromSym}$fee")
+            val fromPrecision = if (quote.fromAsset == "lbtc") 0 else precisionOf(quote.fromAsset)
+            val rate = formatRate(quote.ratePpm, precisionOf(invoice.asset), fromPrecision)
+            Row2("Price", "1 $toSym = $rate ${if (quote.fromAsset == "lbtc") "sat L-BTC" else fromSym}$fee")
         }
 
         val direct = fromAsset == invoice.asset
@@ -1093,13 +1130,204 @@ private fun DecRow(k: String, v: String, mono: Boolean = false, orange: Boolean 
     }
 }
 
-// ─────────────────────────── Open channel ───────────────────────────
+// ─────────────────────────── Asset wallet ───────────────────────────
+
+/**
+ * The asset wallet's L-BTC, which pays the on-chain fees of asset sends and
+ * asset channel opens, with a link to top it up.
+ */
+/**
+ * Least asset-wallet L-BTC `assetchan-open` can work with: the channel's
+ * fee reserve (assetchan-default-fee-reserve, 2 000 sat) plus the funding
+ * fee (at least 1 000 sat, see assetchan.py's funding_fee) - both from one
+ * explicit L-BTC output, else elementsd answers "Insufficient funds".
+ */
+private const val ASSET_CHANNEL_MIN_FEE_BALANCE_MSAT = 3_000_000uL
 
 @Composable
-private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) {
+private fun AssetFeeBalanceRow(
+    repository: WalletRepository,
+    /** Least fee balance the action needs, with why - null = just "more than 0". */
+    required: Pair<ULong, String>? = null,
+    onTopUp: () -> Unit,
+) {
+    val unit = DisplayUnit.from(repository.displayUnit)
+    val fee by repository.assetWalletLbtcMsat.collectAsState()
+    val empty = (fee ?: 0uL) < (required?.first ?: 1uL)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .background(if (empty) Tokens.Orange.copy(alpha = .06f) else Tokens.Field, RoundedCornerShape(14.dp))
+            .border(1.dp, if (empty) Tokens.Orange.copy(alpha = .3f) else Tokens.Border, RoundedCornerShape(14.dp))
+            .padding(horizontal = 15.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Fee balance (L-BTC)",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                color = Tokens.Dim, modifier = Modifier.weight(1f),
+            )
+            Text(
+                "${formatAmount(fee, unit)} ${unit.label}",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = MonoFont),
+                color = if (empty) Tokens.Orange else Tokens.TextMid,
+            )
+            Text(
+                "Top up",
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+                color = Tokens.Accent,
+                modifier = Modifier.padding(start = 12.dp).noRipple(onClick = onTopUp),
+            )
+        }
+        if (empty) {
+            Text(
+                required?.second ?: "Liquid fees are paid in L-BTC from the asset wallet. Top it up before sending.",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                color = Tokens.Orange, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SendAssetSheet(
+    repository: WalletRepository,
+    sheet: WalletSheet.SendAsset,
+    onOpenSheet: (WalletSheet) -> Unit,
+    onClose: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val balances by repository.assetBalances.collectAsState()
+    val assets by repository.assets.collectAsState()
+    val feeMsat by repository.assetWalletLbtcMsat.collectAsState()
+    var addr by remember { mutableStateOf("") }
+    var amount by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var txid by remember { mutableStateOf<String?>(null) }
+    // Asset amounts are typed/shown in whole units ("0.5"), with the
+    // asset's own precision.
+    val precision = assets?.firstOrNull { it.id == sheet.assetId }?.precision?.toInt() ?: DEFAULT_ASSET_PRECISION
+    val available = balances?.firstOrNull { it.asset == sheet.assetId }?.onchainBalanceMsat ?: 0uL
+    val amountMsat = parseAssetAmountToMsat(amount, precision)
+
+    SheetTitle("Send ${sheet.symbol}", onClose)
+    txid?.let {
+        Text("Broadcast ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
+        Text(
+            it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.5.sp),
+            color = Tokens.Dim, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+        )
+        PillButton("Done", modifier = Modifier.fillMaxWidth()) { onClose() }
+        return
+    }
+    FieldLabel("Destination address")
+    DesignField(addr, { addr = it }, "ex1q…", mono = true)
+    FieldLabel("Amount (${sheet.symbol})", topPadding = 12)
+    DesignField(amount, { amount = filterAssetAmountInput(it, precision) }, "0", numeric = true, big = true)
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Text(
+            "Available: ${formatAssetUnits(available, precision)} ${sheet.symbol}",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "Send max",
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.5.sp),
+            color = Tokens.Accent,
+            modifier = Modifier.noRipple { amount = formatAssetUnits(available, precision).replace(" ", "") },
+        )
+    }
+    AssetFeeBalanceRow(repository) { onOpenSheet(WalletSheet.TopUpAssetWallet) }
+    error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
+    PillButton(
+        if (busy) "Broadcasting…" else "Send on-chain",
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+        enabled = !busy && addr.isNotBlank() && amountMsat != null && amountMsat > 0uL &&
+            amountMsat <= available && (feeMsat ?: 0uL) > 0uL,
+    ) {
+        busy = true; error = null
+        scope.launch {
+            runCatching { repository.sendAsset(addr.trim(), sheet.assetId, amountMsat ?: 0uL) }
+                .onSuccess { txid = it }.onFailure { error = it.message }
+            busy = false
+        }
+    }
+}
+
+@Composable
+private fun TopUpAssetWalletSheet(repository: WalletRepository, onClose: () -> Unit) {
     val unit = DisplayUnit.from(repository.displayUnit)
     val scope = rememberCoroutineScope()
-    var peer by remember { mutableStateOf("") }
+    val funds by repository.funds.collectAsState()
+    var amount by remember { mutableStateOf(formatAmount(5_000_000uL, unit).replace(" ", "")) }
+    var feerate by remember { mutableStateOf("normal") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var txid by remember { mutableStateOf<String?>(null) }
+    val available = funds?.onchainConfirmedMsat ?: 0uL
+    val amountMsat = parseAmountToMsat(amount, unit)
+
+    SheetTitle("Top up fee balance", onClose)
+    txid?.let {
+        Text("Sent ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
+        Text(
+            "Usable for fees after 1 confirmation.",
+            style = MaterialTheme.typography.bodySmall, color = Tokens.Dim, modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.5.sp),
+            color = Tokens.Dim, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+        )
+        PillButton("Done", modifier = Modifier.fillMaxWidth()) { onClose() }
+        return
+    }
+    Text(
+        "Assets live in a separate on-chain wallet, and Liquid fees are always paid in L-BTC. " +
+            "This moves L-BTC there from your on-chain L-BTC balance.",
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+        color = Tokens.Dim,
+    )
+    AssetFeeBalanceRow(repository) {}
+    FieldLabel("Amount (${unit.label})", topPadding = 14)
+    DesignField(amount, { amount = filterAmountInput(it, unit) }, "0", numeric = true, big = true)
+    Text(
+        "Available on-chain: ${formatAmount(available, unit)} ${unit.label}",
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    FieldLabel("Feerate", topPadding = 12)
+    app.light.wallet.ui.FeerateChips(selected = feerate, onSelect = { feerate = it })
+    error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
+    PillButton(
+        if (busy) "Sending…" else "Top up",
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+        enabled = !busy && amountMsat != null && amountMsat >= 1000uL && amountMsat <= available,
+    ) {
+        busy = true; error = null
+        scope.launch {
+            runCatching { repository.topUpAssetWallet((amountMsat ?: 0uL) / 1000uL, feerate) }
+                .onSuccess { txid = it }.onFailure { error = it.message }
+            busy = false
+        }
+    }
+}
+
+// ─────────────────────────── Open channel ───────────────────────────
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun OpenChannelSheet(
+    repository: WalletRepository,
+    initialAssetId: String?,
+    onOpenSheet: (WalletSheet) -> Unit,
+    onClose: () -> Unit,
+) {
+    val unit = DisplayUnit.from(repository.displayUnit)
+    val scope = rememberCoroutineScope()
+    val assets by repository.assets.collectAsState()
+    val assetBalances by repository.assetBalances.collectAsState()
     var amount by remember { mutableStateOf("") }
     var minconf by remember { mutableStateOf("") }
     var feerate by remember { mutableStateOf("") }
@@ -1107,77 +1335,112 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<String?>(null) }
+    // null = an ordinary L-BTC channel (fundchannel from CLN's wallet);
+    // else an asset channel funded from the asset wallet (assetchan-open).
+    var assetId by remember { mutableStateOf(initialAssetId) }
 
-    // Swap service connect-by-default shortcut: fetched once per sheet
-    // open, not re-fetched on every recomposition. `swapService == null`
-    // after loading (not still Unit/not-yet-fetched) means the server has
-    // none configured - the switch itself gets disabled in that case,
-    // rather than silently doing nothing when checked.
+    // Channels are opened only with the swap service - there is no
+    // free-form peer. Fetched once per sheet open; `null` after loading
+    // means the server has none configured, and opening is disabled.
     var swapService by remember { mutableStateOf<app.light.wallet.core.SwapService?>(null) }
     var swapServiceLoaded by remember { mutableStateOf(false) }
-    var useSwapService by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         swapService = runCatching { repository.getSwapService() }.getOrNull()
         swapServiceLoaded = true
     }
 
-    SheetTitle("Open channel", onClose)
+    // Assets that can fund a channel: the ones with an on-chain balance,
+    // plus a preselected one even at 0 (the sheet then says why it can't).
+    val symbols = remember(assets) { assets.orEmpty().associate { it.id to it.symbol } }
+    val fundable = remember(assetBalances, initialAssetId) {
+        val held = assetBalances.orEmpty().filter { it.asset != "lbtc" && it.onchainBalanceMsat > 0uL }.map { it.asset }
+        (listOfNotNull(initialAssetId) + held).distinct()
+    }
+    val symbol = assetId?.let { symbols[it] ?: shortId(it, 4) }
+    val assetAvailable = assetId?.let { id -> assetBalances?.firstOrNull { it.asset == id }?.onchainBalanceMsat } ?: 0uL
+
+    SheetTitle(if (symbol != null) "Open $symbol channel" else "Open channel", onClose)
     result?.let {
         Text("Channel funding broadcast ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
         Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.5.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
         PillButton("Done", modifier = Modifier.fillMaxWidth()) { onClose() }
         return
     }
-    Row(
-        modifier = Modifier
-            .padding(bottom = 10.dp)
-            .noRipple(enabled = swapService != null) {
-                useSwapService = !useSwapService
-                peer = ""
-            },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        app.light.wallet.ui.DesignSwitch(checked = useSwapService, enabled = swapService != null) {
-            useSwapService = !useSwapService
-            peer = ""
-        }
-        Column {
-            Text("Connect to swap service", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp), color = Tokens.TextMid)
-            Text(
-                if (swapServiceLoaded && swapService == null) "not configured server-side" else "cross-asset payments, no channel",
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = Tokens.Faint,
-            )
+    if (fundable.isNotEmpty()) {
+        FieldLabel("Channel asset")
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 14.dp),
+        ) {
+            AssetPill("L-BTC", assetId == null) { assetId = null; amount = "" }
+            fundable.forEach { id ->
+                AssetPill(symbols[id] ?: shortId(id, 4), assetId == id) { assetId = id; amount = "" }
+            }
         }
     }
-    // With the swap service on, the field only shows its node id (locked);
-    // the host:port is filled in behind the scenes when connecting.
-    val swapPeer = swapService?.takeIf { useSwapService }
-    FieldLabel(if (swapPeer != null) "Peer node ID" else "Peer connect string")
-    DesignField(
-        swapPeer?.nodeId ?: peer, { if (swapPeer == null) peer = it },
-        "nodeid@host:port", mono = true, lines = 2, enabled = swapPeer == null,
-    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Tokens.CardDeep, RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text("Peer: swap service", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp), color = Tokens.TextMid)
+        Text(
+            when {
+                !swapServiceLoaded -> "Loading swap service…"
+                swapService == null -> "Swap service is not configured server-side, so a channel can't be opened."
+                else -> "A direct channel can only be opened with the swap service."
+            },
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+            color = if (swapServiceLoaded && swapService == null) Tokens.Red else Tokens.Faint,
+        )
+    }
+    // Asset amounts are typed in whole units ("0.5"), with the asset's own precision.
+    val assetPrecision = assetId?.let { id -> assets?.firstOrNull { it.id == id }?.precision?.toInt() } ?: DEFAULT_ASSET_PRECISION
+    val amountMsat = if (assetId != null) parseAssetAmountToMsat(amount, assetPrecision) else parseAmountToMsat(amount, unit)
     Row(modifier = Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Amount (${unit.label})", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)
+            Text("Amount (${symbol ?: unit.label})", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)
             DesignField(
-                amount, { amount = filterAmountInput(it, unit) },
-                when (unit) {
-                    DisplayUnit.SAT -> "1 000 000"
-                    DisplayUnit.MSAT -> "1 000 000 000"
-                    DisplayUnit.BTC -> "0.01"
+                amount, {
+                    amount = if (assetId != null) filterAssetAmountInput(it, assetPrecision) else filterAmountInput(it, unit)
+                },
+                when {
+                    assetId != null -> "10"
+                    unit == DisplayUnit.SAT -> "1 000 000"
+                    unit == DisplayUnit.MSAT -> "1 000 000 000"
+                    else -> "0.01"
                 },
                 numeric = true, big = true,
             )
         }
-        Column(modifier = Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Min conf", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)
-            DesignField(minconf, { minconf = it.filter { c -> c.isDigit() } }, "1", numeric = true)
+        // assetchan-open has no minconf/feerate: it builds and prices the
+        // funding transaction itself.
+        if (assetId == null) {
+            Column(modifier = Modifier.width(110.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Min conf", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Dim)
+                DesignField(minconf, { minconf = it.filter { c -> c.isDigit() } }, "1", numeric = true)
+            }
         }
     }
-    FieldLabel("Feerate", topPadding = 12)
-    app.light.wallet.ui.FeerateChips(selected = feerate.ifBlank { "normal" }, onSelect = { feerate = it })
+    if (assetId != null) {
+        Text(
+            "Available: ${formatAssetUnits(assetAvailable, assetPrecision)} $symbol",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        AssetFeeBalanceRow(
+            repository,
+            required = ASSET_CHANNEL_MIN_FEE_BALANCE_MSAT to
+                "Opening an asset channel needs at least 3 000 sats of L-BTC here: 2 000 kept in the channel " +
+                "as its fee reserve, plus the funding transaction's fee (1 000+). Top it up first.",
+        ) { onOpenSheet(WalletSheet.TopUpAssetWallet) }
+    } else {
+        FieldLabel("Feerate", topPadding = 12)
+        app.light.wallet.ui.FeerateChips(selected = feerate.ifBlank { "normal" }, onSelect = { feerate = it })
+    }
     Row(
         modifier = Modifier.padding(top = 12.dp).noRipple { announce = !announce },
         verticalAlignment = Alignment.CenterVertically,
@@ -1188,36 +1451,41 @@ private fun OpenChannelSheet(repository: WalletRepository, onClose: () -> Unit) 
         Text("public channel, visible in gossip", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = Tokens.Faint)
     }
     error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
+    val feeMsat by repository.assetWalletLbtcMsat.collectAsState()
+    val amountOk = amountMsat != null && amountMsat > 0uL &&
+        (assetId == null || (amountMsat <= assetAvailable && (feeMsat ?: 0uL) >= ASSET_CHANNEL_MIN_FEE_BALANCE_MSAT))
     PillButton(
         if (busy) "Opening…" else "Connect & fund channel",
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-        enabled = !busy && (swapPeer != null || peer.isNotBlank()) && parseAmountToMsat(amount, unit) != null,
+        enabled = !busy && swapService != null && amountOk,
     ) {
+        val swap = swapService ?: return@PillButton
         busy = true; error = null
-        val connectString = swapPeer?.let { "${it.nodeId}@${it.addr}" } ?: peer
+        val asset = assetId
         scope.launch {
             runCatching {
                 val node = repository.requireNode()
-                val nodeId = if ("@" in connectString) {
-                    val (id, hostPort) = connectString.trim().split("@", limit = 2)
-                    val host = hostPort.substringBeforeLast(":")
-                    val port = hostPort.substringAfterLast(":").toUIntOrNull()
-                    node.connectPeer(id.trim(), host, port)
-                    id.trim()
-                } else connectString.trim()
-                node.openChannel(
-                    OpenChannelParams(
-                        peerId = nodeId, amountSat = (parseAmountToMsat(amount, unit) ?: 0uL) / 1000uL, all = false,
-                        feerate = feerate.ifBlank { null }, announce = announce, pushMsat = null,
-                        closeTo = null, minconf = minconf.toUIntOrNull(), mindepth = null, reserveSat = null,
-                    ),
-                )
-            }.onSuccess { result = "txid ${it.txid}" }.onFailure { error = it.message }
+                val nodeId = swap.nodeId.trim()
+                val host = swap.addr.substringBeforeLast(":")
+                val port = swap.addr.substringAfterLast(":", "").toUIntOrNull()
+                node.connectPeer(nodeId, host, port)
+                if (asset != null) {
+                    repository.openAssetChannel(nodeId, asset, amountMsat ?: 0uL, announce).txid
+                } else {
+                    node.openChannel(
+                        OpenChannelParams(
+                            peerId = nodeId, amountSat = (amountMsat ?: 0uL) / 1000uL, all = false,
+                            feerate = feerate.ifBlank { null }, announce = announce, pushMsat = null,
+                            closeTo = null, minconf = minconf.toUIntOrNull(), mindepth = null, reserveSat = null,
+                        ),
+                    ).txid
+                }
+            }.onSuccess { result = "txid $it" }.onFailure { error = it.message }
             busy = false
         }
     }
     Text(
-        "connect → fundchannel",
+        if (assetId != null) "connect → assetchan-open" else "connect → fundchannel",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
         color = Tokens.Faint,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -1232,13 +1500,14 @@ private fun InvoiceDetailSheet(repository: WalletRepository, sheet: WalletSheet.
     val context = LocalContext.current
     val inv = sheet.invoice
     val unit = DisplayUnit.from(repository.displayUnit)
+    val assets by repository.assets.collectAsState()
     SheetTitle("Invoice", onClose)
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
         if (inv.status == "unpaid" && inv.bolt11 != null) {
             QrBox(inv.bolt11!!.uppercase(), sizeDp = 164)
         }
         Text(
-            formatAmount(inv.amountMsat, unit) + " " + unit.label,
+            app.light.wallet.ui.formatAmountIn(inv.amountMsat, inv.asset, assets, unit),
             style = MaterialTheme.typography.displaySmall.copy(fontSize = 30.sp),
             color = app.light.wallet.ui.statusColor(inv.status),
             modifier = Modifier.padding(vertical = 12.dp),
@@ -1247,13 +1516,14 @@ private fun InvoiceDetailSheet(repository: WalletRepository, sheet: WalletSheet.
     KvPanel(
         listOfNotNull(
             Triple("Status", inv.status, false),
+            Triple("Asset", inv.asset?.let { assetSymbolOf(it, assets) + " · " + it } ?: "L-BTC", inv.asset != null),
             Triple("Description", inv.description ?: "—", false),
             Triple("Label", inv.label, true),
             Triple("Payment hash", inv.paymentHash, true),
             inv.paymentPreimage?.let { Triple("Preimage", it, true) },
             Triple("Expires", formatUnixTime(inv.expiresAt), false),
             inv.paidAt?.let { Triple("Paid at", formatUnixTime(it), false) },
-            inv.amountReceivedMsat?.let { Triple("Received", formatAmountFull(it, unit), false) },
+            inv.amountReceivedMsat?.let { Triple("Received", app.light.wallet.ui.formatAmountIn(it, inv.asset, assets, unit, full = true), false) },
         ),
     )
     inv.bolt11?.let {
@@ -1360,6 +1630,15 @@ private fun ChannelDetailSheet(
     val unit = DisplayUnit.from(repository.displayUnit)
     val scope = rememberCoroutineScope()
     val ch = sheet.channel
+    val assets by repository.assets.collectAsState()
+    // Asset channels: every amount is that asset's msat - show whole units
+    // with its symbol instead of the L-BTC display unit.
+    val assetId = ch.asset
+    fun amountShort(msat: ULong?): String =
+        if (assetId == null) formatAmount(msat, unit) + " " + unit.label
+        else formatAssetUnits(msat, assetPrecisionOf(assetId, assets)) + " " + assetSymbolOf(assetId, assets)
+    fun amountFull(msat: ULong?): String =
+        if (assetId == null) formatAmountFull(msat, unit) else amountShort(msat)
     var confirmClose by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1368,11 +1647,11 @@ private fun ChannelDetailSheet(
     SheetTitle(ch.peerAlias?.takeIf { it.isNotBlank() } ?: "Channel", onClose)
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
         Text(
-            formatAmount(ch.spendableMsat, unit) + " " + unit.label,
+            amountShort(ch.spendableMsat),
             style = MaterialTheme.typography.displaySmall.copy(fontSize = 30.sp),
         )
         Text(
-            "spendable of ${formatAmount(ch.totalMsat, unit)} capacity",
+            "spendable of ${amountShort(ch.totalMsat)} capacity",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint,
             modifier = Modifier.padding(top = 3.dp),
         )
@@ -1383,13 +1662,14 @@ private fun ChannelDetailSheet(
             Triple("State", ch.state, false),
             Triple("Connected", if (ch.peerConnected) "yes" else "no", false),
             ch.shortChannelId?.let { Triple("Short id", it, true) },
-            Triple("Capacity", formatAmountFull(ch.totalMsat, unit), false),
-            Triple("Ours", formatAmountFull(ch.toUsMsat, unit), false),
-            Triple("Theirs", formatAmountFull(ch.toThemMsat, unit), false),
-            Triple("Spendable", formatAmountFull(ch.spendableMsat, unit), false),
-            Triple("Receivable", formatAmountFull(ch.receivableMsat, unit), false),
-            ch.ourReserveMsat?.let { Triple("Our reserve", formatAmountFull(it, unit), false) },
-            ch.feeBaseMsat?.let { Triple("Fee base", formatAmountFull(it, unit), false) },
+            assetId?.let { Triple("Asset", assetSymbolOf(it, assets) + " · " + it, true) },
+            Triple("Capacity", amountFull(ch.totalMsat), false),
+            Triple("Ours", amountFull(ch.toUsMsat), false),
+            Triple("Theirs", amountFull(ch.toThemMsat), false),
+            Triple("Spendable", amountFull(ch.spendableMsat), false),
+            Triple("Receivable", amountFull(ch.receivableMsat), false),
+            ch.ourReserveMsat?.let { Triple("Our reserve", amountFull(it), false) },
+            ch.feeBaseMsat?.let { Triple("Fee base", amountFull(it), false) },
             ch.feeProportionalMillionths?.let { Triple("Fee ppm", it.toString(), false) },
             Triple("Opener", ch.opener, false),
             ch.fundingTxid?.let { Triple("Funding txid", it, true) },
@@ -1420,7 +1700,10 @@ private fun ChannelDetailSheet(
                         feeNegotiationStep = null, forceLeaseClosed = null,
                     ),
                 )
-            }.onSuccess { closed = it.closeType }.onFailure { error = it.message }
+            }.onSuccess {
+                closed = it.closeType
+                repository.refreshChannels(); repository.refreshAssetBalances(); repository.refreshFunds()
+            }.onFailure { error = it.message }
             busy = false
         }
     }

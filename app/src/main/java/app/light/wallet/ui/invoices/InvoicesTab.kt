@@ -48,6 +48,7 @@ import app.light.wallet.ui.RowIcon
 import app.light.wallet.ui.StatusBadge
 import app.light.wallet.ui.DisplayUnit
 import app.light.wallet.ui.formatAmount
+import app.light.wallet.ui.formatAmountIn
 import app.light.wallet.ui.formatUnixTime
 import app.light.wallet.ui.expiresIn
 import app.light.wallet.ui.relativeTime
@@ -73,6 +74,7 @@ fun InvoicesTab(
     }
     val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     val invoicesRaw by repository.invoices.collectAsState()
+    val assets by repository.assets.collectAsState()
     val paysRaw by repository.pays.collectAsState()
     val active by repository.activePayments.collectAsState()
     val connState by repository.connState.collectAsState()
@@ -130,7 +132,7 @@ fun InvoicesTab(
         ) {
             if (segment == 0) {
                 items(invoices) { inv ->
-                    InvoiceRow(inv, unit) { onOpenSheet(WalletSheet.InvoiceDetail(inv)) }
+                    InvoiceRow(inv, unit, assets) { onOpenSheet(WalletSheet.InvoiceDetail(inv)) }
                 }
                 if (invoices.isEmpty()) item { Empty("No invoices created yet.") }
             } else {
@@ -196,7 +198,7 @@ private fun Empty(text: String) {
 }
 
 @Composable
-private fun InvoiceRow(inv: InvoiceEntry, unit: DisplayUnit, onClick: () -> Unit) {
+private fun InvoiceRow(inv: InvoiceEntry, unit: DisplayUnit, assets: List<app.light.wallet.core.AssetInfo>?, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -225,7 +227,8 @@ private fun InvoiceRow(inv: InvoiceEntry, unit: DisplayUnit, onClick: () -> Unit
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
-                formatAmount(inv.amountMsat, unit),
+                // Always with its unit: L-BTC or the invoice's asset.
+                formatAmountIn(inv.amountMsat, inv.asset, assets, unit),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp, fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold),
             )
             StatusBadge(inv.status, statusColor(inv.status))

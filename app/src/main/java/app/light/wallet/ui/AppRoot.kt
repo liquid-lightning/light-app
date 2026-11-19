@@ -130,7 +130,6 @@ fun AppRoot(repository: WalletRepository) {
                         Tab.MAIN -> MainTab(
                             repository,
                             onOpenSheet = { sheet = it },
-                            onGoTransactions = { tab = Tab.TRANSACTIONS },
                             onRecentInvoice = { inv ->
                                 tab = Tab.INVOICES
                                 invoicesSegmentRequest = invoicesSegmentRequest.first + 1 to 0

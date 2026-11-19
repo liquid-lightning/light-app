@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Icon
@@ -88,7 +87,6 @@ private data class RecentItem(
 fun MainTab(
     repository: WalletRepository,
     onOpenSheet: (WalletSheet) -> Unit,
-    onGoTransactions: () -> Unit,
     onRecentInvoice: (app.light.wallet.core.InvoiceEntry) -> Unit = {},
     onRecentPay: (app.light.wallet.core.PayListEntry) -> Unit = {},
     onRecentTx: (String) -> Unit = {},
@@ -288,7 +286,6 @@ fun MainTab(
                             worth = null,
                             onReceive = { onOpenSheet(WalletSheet.Receive()) },
                             onSend = { onOpenSheet(WalletSheet.SendChain) },
-                            onMore = onGoTransactions,
                         )
                         LightningCard(
                             title = "Lightning",
@@ -300,7 +297,6 @@ fun MainTab(
                             onCopyNodeId = { nodeId?.let { copyToClipboard(context, "Node ID", it) } },
                             onCreateInvoice = { onOpenSheet(WalletSheet.NewInvoice()) },
                             onPay = { onOpenSheet(WalletSheet.Pay()) },
-                            onMore = { onOpenSheet(WalletSheet.NodeInfoSheet) },
                         )
                     }
                 } else {
@@ -352,7 +348,6 @@ fun MainTab(
                             // wallet), not CLN's - see WalletSheet.Receive.
                             onReceive = { onOpenSheet(WalletSheet.Receive(symbol, assetId)) },
                             onSend = { onOpenSheet(WalletSheet.SendAsset(assetId, symbol)) },
-                            onMore = onGoTransactions,
                             assetId = assetId,
                             feeBalance = "${formatAmount(assetWalletLbtc, unit)} ${unit.label}",
                             feeBalanceEmpty = (assetWalletLbtc ?: 0uL) == 0uL,
@@ -368,7 +363,6 @@ fun MainTab(
                             onCopyNodeId = { nodeId?.let { copyToClipboard(context, "Node ID", it) } },
                             onCreateInvoice = { onOpenSheet(WalletSheet.NewInvoice(assetId)) },
                             onPay = { onOpenSheet(WalletSheet.Pay()) },
-                            onMore = { onOpenSheet(WalletSheet.NodeInfoSheet) },
                             openChannelLabel = "Open $symbol channel",
                             onOpenChannel = { onOpenSheet(WalletSheet.OpenChannel(assetId)) },
                         )
@@ -507,7 +501,6 @@ private fun OnchainCard(
     worth: String?,
     onReceive: () -> Unit,
     onSend: (() -> Unit)?,
-    onMore: () -> Unit,
     amountColor: Color = Tokens.Text,
     priceLine: String? = null,
     assetId: String? = null,
@@ -605,7 +598,6 @@ private fun OnchainCard(
             if (onSend != null) {
                 SoftPillButton("Send", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowUpward, onClick = onSend)
             }
-            MoreDot(onMore)
         }
     }
 }
@@ -621,7 +613,6 @@ private fun LightningCard(
     onCopyNodeId: () -> Unit,
     onCreateInvoice: () -> Unit,
     onPay: () -> Unit,
-    onMore: () -> Unit,
     openChannelLabel: String? = null,
     onOpenChannel: () -> Unit = {},
 ) {
@@ -711,7 +702,6 @@ private fun LightningCard(
                 )
             }
             SoftPillButton("Pay invoice", modifier = Modifier.weight(1f), onClick = onPay)
-            MoreDot(onMore)
         }
     }
 }
@@ -734,15 +724,3 @@ private fun formatLbtcPerAssetUnit(ratePpm: ULong, precision: Int, unit: Display
     } else v.toPlainString()
 }
 
-@Composable
-private fun MoreDot(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .background(Color(0x0FFFFFFF), CircleShape)
-            .noRipple(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(Icons.Filled.MoreHoriz, null, tint = Tokens.TextMid, modifier = Modifier.size(16.dp))
-    }
-}

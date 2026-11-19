@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Lock
@@ -83,6 +84,21 @@ fun SettingsTab(
                     )
                 }
             }
+        }
+
+        SectionLabel("Lightning node", topPadding = 20)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Tokens.Card, RoundedCornerShape(16.dp))
+                .border(1.dp, Tokens.BorderSoft, RoundedCornerShape(16.dp)),
+        ) {
+            SettingsRow(
+                icon = { Icon(Icons.Filled.Bolt, null, tint = Tokens.Accent, modifier = Modifier.size(14.dp)) },
+                title = "Node info",
+                subtitle = "Node ID, address, channels and fees",
+                chevron = true,
+            ) { onOpenSheet(WalletSheet.NodeInfoSheet) }
         }
 
         SectionLabel("Security", topPadding = 20)

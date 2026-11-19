@@ -41,6 +41,9 @@ import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.LiquidityBar
 import app.light.wallet.ui.StatusBadge
+import app.light.wallet.ui.assetPrecisionOf
+import app.light.wallet.ui.assetSymbolOf
+import app.light.wallet.ui.formatAssetUnits
 import app.light.wallet.ui.formatCompactSat
 import app.light.wallet.ui.sheets.WalletSheet
 import app.light.wallet.ui.shortId
@@ -58,6 +61,7 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
     val connState by repository.connState.collectAsState()
     var refreshing by remember { mutableStateOf(false) }
     val channels = channelsRaw.orEmpty()
+    val assets by repository.assets.collectAsState()
 
     LaunchedEffect(connState) {
         // Gate on Connected, not just `node != null` - see MainTab's
@@ -65,7 +69,11 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
         if (connState is ConnState.Connected && repository.channels.value == null) repository.refreshChannels()
     }
 
-    val usable = channels.filter { it.state == "CHANNELD_NORMAL" }
+    val usableAll = channels.filter { it.state == "CHANNELD_NORMAL" }
+    // The summary is L-BTC only: asset channels' msat are another asset's
+    // and can't be added to it. They get one line per asset below instead.
+    val usable = usableAll.filter { it.asset == null }
+    val assetTotals = usableAll.filter { it.asset != null }.groupBy { it.asset!! }
     val outbound = usable.sumOf { (it.toUsMsat ?: 0uL).toLong() }.toULong()
     val inbound = usable.sumOf { (it.toThemMsat ?: 0uL).toLong() }.toULong()
     val capacity = usable.sumOf { (it.totalMsat ?: 0uL).toLong() }.toULong()
@@ -87,7 +95,7 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
                 modifier = Modifier
                     .height(38.dp)
                     .background(Tokens.Accent, RoundedCornerShape(999.dp))
-                    .noRipple { onOpenSheet(WalletSheet.OpenChannel) }
+                    .noRipple { onOpenSheet(WalletSheet.OpenChannel()) }
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -124,10 +132,21 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
             }
             LiquidityBar(outbound, outbound + inbound, modifier = Modifier.padding(top = 14.dp))
             Text(
-                "Total capacity ${formatCompactSat(capacity)} across ${usable.size} channels",
+                "Total capacity ${formatCompactSat(capacity)} L-BTC across ${usable.size} channels",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
                 color = Tokens.Faint, modifier = Modifier.padding(top = 8.dp),
             )
+            assetTotals.forEach { (assetId, chs) ->
+                val sym = assetSymbolOf(assetId, assets)
+                val p = assetPrecisionOf(assetId, assets)
+                val out = chs.sumOf { (it.toUsMsat ?: 0uL).toLong() }.toULong()
+                val inb = chs.sumOf { (it.toThemMsat ?: 0uL).toLong() }.toULong()
+                Text(
+                    "$sym: out ${formatAssetUnits(out, p)} · in ${formatAssetUnits(inb, p)} across ${chs.size} channels",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                    color = Tokens.Faint, modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
 
         LazyColumn(
@@ -135,7 +154,7 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(channels) { ch ->
-                ChannelCard(ch) { onOpenSheet(WalletSheet.ChannelDetail(ch)) }
+                ChannelCard(ch, assets) { onOpenSheet(WalletSheet.ChannelDetail(ch)) }
             }
             if (channels.isEmpty()) {
                 item {
@@ -152,7 +171,13 @@ fun ChannelsTab(repository: WalletRepository, onOpenSheet: (WalletSheet) -> Unit
 }
 
 @Composable
-private fun ChannelCard(ch: PeerChannel, onClick: () -> Unit) {
+private fun ChannelCard(ch: PeerChannel, assets: List<app.light.wallet.core.AssetInfo>?, onClick: () -> Unit) {
+    // Asset channels: amounts in that asset's whole units, with its symbol.
+    val assetId = ch.asset
+    val symbol = assetId?.let { assetSymbolOf(it, assets) }
+    fun amount(msat: ULong?): String =
+        if (assetId == null) formatCompactSat(msat)
+        else formatAssetUnits(msat, assetPrecisionOf(assetId, assets)) + " " + symbol
     val stateLabel = when (ch.state) {
         "CHANNELD_NORMAL" -> if (ch.peerConnected) "active" else "offline"
         "CHANNELD_AWAITING_LOCKIN", "DUALOPEND_AWAITING_LOCKIN" -> "opening"
@@ -180,15 +205,16 @@ private fun ChannelCard(ch: PeerChannel, onClick: () -> Unit) {
                     color = Tokens.Dim,
                 )
             }
+            symbol?.let { StatusBadge(it, Tokens.Green) }
             StatusBadge(stateLabel, statusColor(stateLabel))
         }
         LiquidityBar(ch.toUsMsat ?: 0uL, ch.totalMsat ?: 0uL, modifier = Modifier.padding(top = 12.dp), height = 5)
         Row(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
             Text("Ours ", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim)
-            Text(formatCompactSat(ch.toUsMsat), style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Accent)
+            Text(amount(ch.toUsMsat), style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Accent)
             Spacer(Modifier.weight(1f))
             Text("Theirs ", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim)
-            Text(formatCompactSat(ch.toThemMsat), style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Purple)
+            Text(amount(ch.toThemMsat), style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Purple)
         }
     }
 }

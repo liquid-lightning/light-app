@@ -63,7 +63,10 @@ import app.light.wallet.ui.RowIcon
 import app.light.wallet.ui.SoftPillButton
 import app.light.wallet.ui.autoRefreshTick
 import app.light.wallet.ui.copyToClipboard
+import app.light.wallet.ui.DEFAULT_ASSET_PRECISION
 import app.light.wallet.ui.formatAmount
+import app.light.wallet.ui.formatAmountIn
+import app.light.wallet.ui.formatAssetUnits
 import app.light.wallet.ui.formatCompactSat
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.relativeTime
@@ -99,6 +102,8 @@ fun MainTab(
     val transactions by repository.transactions.collectAsState()
     val assets by repository.assets.collectAsState()
     val assetBalances by repository.assetBalances.collectAsState()
+    val channels by repository.channels.collectAsState()
+    val assetWalletLbtc by repository.assetWalletLbtcMsat.collectAsState()
     var refreshing by remember { mutableStateOf(false) }
     val tick = autoRefreshTick()
     val unit = DisplayUnit.from(repository.displayUnit)
@@ -116,14 +121,14 @@ fun MainTab(
 
     // Recent activity: paid invoices + lightning payments + on-chain
     // transactions, all derived from the shared flows.
-    val recent = remember(funds, invoices, pays, transactions, connState, unit) {
+    val recent = remember(funds, invoices, pays, transactions, connState, unit, assets) {
         val now = (System.currentTimeMillis() / 1000).toULong()
         val tip = (connState as? ConnState.Connected)?.info?.blockheight ?: 0u
         val inv = invoices.orEmpty().filter { it.status == "paid" }.map { i ->
             RecentItem(
                 label = i.description?.ifBlank { null } ?: i.label,
                 time = relativeTime(i.paidAt),
-                amount = "+" + formatAmount(i.amountReceivedMsat, unit),
+                amount = "+" + formatAmountIn(i.amountReceivedMsat, i.asset, assets, unit),
                 amountColor = Tokens.Green, iconColor = Tokens.Green,
                 chain = false, sort = i.paidAt ?: 0uL,
                 onClick = { onRecentInvoice(i) },
@@ -268,12 +273,17 @@ fun MainTab(
                 val assetId = pages.getOrNull(index)
                 val nodeId = (connState as? ConnState.Connected)?.info?.id
                 if (assetId == null) {
+                    // L-BTC channels only: listfunds' outbound total also
+                    // sums asset channels (their msat are another asset's).
+                    val lbtcChannels = channels?.filter { it.state == "CHANNELD_NORMAL" && it.asset == null }
                     Column {
                         OnchainCard(
                             title = "Liquid · on-chain",
                             badge = { Icon(Icons.Filled.WaterDrop, null, tint = Color.White, modifier = Modifier.size(12.dp)) },
                             badgeColor = Tokens.Liquid,
-                            amount = formatAmount(f?.let { it.onchainConfirmedMsat + it.onchainUnconfirmedMsat }, unit),
+                            // Confirmed, unreserved only: a pending send's inputs and
+                            // its unconfirmed change don't count until it's mined.
+                            amount = formatAmount(f?.onchainConfirmedMsat, unit),
                             unitLabel = unit.label,
                             worth = null,
                             onReceive = { onOpenSheet(WalletSheet.Receive()) },
@@ -282,8 +292,8 @@ fun MainTab(
                         )
                         LightningCard(
                             title = "Lightning",
-                            channels = f?.channels?.size ?: 0,
-                            amount = formatAmount(f?.outboundMsat, unit),
+                            channels = lbtcChannels?.size ?: f?.channels?.size ?: 0,
+                            amount = formatAmount(lbtcChannels?.sumOf { (it.toUsMsat ?: 0uL).toLong() }?.toULong() ?: f?.outboundMsat, unit),
                             unitLabel = unit.label,
                             worth = null,
                             nodeId = nodeId,
@@ -297,6 +307,7 @@ fun MainTab(
                     val info = assetsById[assetId]
                     val balance = assetBalances.orEmpty().firstOrNull { it.asset == assetId }
                     val symbol = info?.symbol ?: shortId(assetId, 6)
+                    val precision = info?.precision?.toInt() ?: DEFAULT_ASSET_PRECISION
                     val price = info?.price?.takeIf { it.fromAsset == "lbtc" }
                     // Reference value only: an actual swap adds the pricing
                     // margin and fees on top (see the Pay sheet's own quote).
@@ -307,11 +318,17 @@ fun MainTab(
                         "≈ ${formatAmount(v, unit)} ${unit.label}"
                     }
                     val onchain = balance?.onchainBalanceMsat ?: 0uL
-                    val channel = balance?.channelBalanceMsat ?: 0uL
+                    // Summed here from live (CHANNELD_NORMAL) channels, not
+                    // taken from assetbalances: older assetswap-plugin builds
+                    // also count closed (ONCHAIN) channels, whose money is
+                    // already back on-chain.
+                    val channel = channels
+                        ?.filter { it.state == "CHANNELD_NORMAL" && it.asset.equals(assetId, ignoreCase = true) }
+                        ?.sumOf { (it.toUsMsat ?: 0uL).toLong() }?.toULong()
+                        ?: balance?.channelBalanceMsat ?: 0uL
                     Column {
-                        // Asset amounts are always shown in "thousandths"
-                        // (same arithmetic as DisplayUnit.SAT), never with
-                        // bitcoin's 8-decimal BTC conversion.
+                        // Asset amounts are shown in whole units with the
+                        // asset's own precision (base_units / 10^precision).
                         OnchainCard(
                             title = "$symbol · on-chain",
                             badge = {
@@ -322,26 +339,29 @@ fun MainTab(
                                 )
                             },
                             badgeColor = Tokens.Green,
-                            amount = formatAmount(onchain, DisplayUnit.SAT),
+                            amount = formatAssetUnits(onchain, precision),
                             unitLabel = symbol,
                             amountColor = Tokens.Green,
                             worth = worth(onchain),
                             priceLine = price?.let {
-                                val perUnit = formatLbtcPerAssetUnit(it.ratePpm, unit)
+                                val perUnit = formatLbtcPerAssetUnit(it.ratePpm, precision, unit)
                                 val label = if (unit == DisplayUnit.SAT && perUnit == "1") "sat" else unit.label
                                 "1 $symbol = $perUnit $label"
                             },
-                            onReceive = { onOpenSheet(WalletSheet.Receive(symbol)) },
-                            // withdraw has no asset parameter - on-chain
-                            // sends are L-BTC only for now.
-                            onSend = null,
+                            // The asset wallet (the node's own elementsd
+                            // wallet), not CLN's - see WalletSheet.Receive.
+                            onReceive = { onOpenSheet(WalletSheet.Receive(symbol, assetId)) },
+                            onSend = { onOpenSheet(WalletSheet.SendAsset(assetId, symbol)) },
                             onMore = onGoTransactions,
                             assetId = assetId,
+                            feeBalance = "${formatAmount(assetWalletLbtc, unit)} ${unit.label}",
+                            feeBalanceEmpty = (assetWalletLbtc ?: 0uL) == 0uL,
+                            onTopUp = { onOpenSheet(WalletSheet.TopUpAssetWallet) },
                         )
                         LightningCard(
                             title = "Lightning · $symbol",
                             channels = null,
-                            amount = formatAmount(channel, DisplayUnit.SAT),
+                            amount = formatAssetUnits(channel, precision),
                             unitLabel = symbol,
                             worth = worth(channel),
                             nodeId = nodeId,
@@ -349,6 +369,8 @@ fun MainTab(
                             onCreateInvoice = { onOpenSheet(WalletSheet.NewInvoice(assetId)) },
                             onPay = { onOpenSheet(WalletSheet.Pay()) },
                             onMore = { onOpenSheet(WalletSheet.NodeInfoSheet) },
+                            openChannelLabel = "Open $symbol channel",
+                            onOpenChannel = { onOpenSheet(WalletSheet.OpenChannel(assetId)) },
                         )
                     }
                 }
@@ -489,6 +511,9 @@ private fun OnchainCard(
     amountColor: Color = Tokens.Text,
     priceLine: String? = null,
     assetId: String? = null,
+    feeBalance: String? = null,
+    feeBalanceEmpty: Boolean = false,
+    onTopUp: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Column(
@@ -548,6 +573,33 @@ private fun OnchainCard(
                 Icon(Icons.Outlined.ContentCopy, null, tint = Tokens.Accent, modifier = Modifier.size(12.dp))
             }
         }
+        // The asset wallet's L-BTC: pays every asset send's on-chain fee.
+        feeBalance?.let { fee ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Fee balance",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                    color = Tokens.Dim,
+                )
+                Text(
+                    fee,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = MonoFont),
+                    color = if (feeBalanceEmpty) Tokens.Orange else Tokens.TextMid,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Top up",
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+                    color = Tokens.Accent,
+                    modifier = Modifier.noRipple(onClick = onTopUp),
+                )
+            }
+        }
         Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SoftPillButton("Receive", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowDownward, onClick = onReceive)
             if (onSend != null) {
@@ -570,6 +622,8 @@ private fun LightningCard(
     onCreateInvoice: () -> Unit,
     onPay: () -> Unit,
     onMore: () -> Unit,
+    openChannelLabel: String? = null,
+    onOpenChannel: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -598,6 +652,14 @@ private fun LightningCard(
         }
         worth?.let {
             Text(it, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp), color = Tokens.Dim, modifier = Modifier.padding(top = 4.dp))
+        }
+        openChannelLabel?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+                color = Tokens.Accent,
+                modifier = Modifier.padding(top = 8.dp).noRipple(onClick = onOpenChannel),
+            )
         }
         Box(
             Modifier
@@ -655,12 +717,13 @@ private fun LightningCard(
 }
 
 /**
- * L-BTC cost of 1 displayed asset unit (1 000 msat of the asset, the same
- * "thousandths" the balance itself is shown in) at `ratePpm`, in `unit`:
- * that's ratePpm / 1e6 sats, kept exact so a sub-sat price still shows.
+ * L-BTC cost of 1 whole asset (10^precision base units of 1 000 msat each,
+ * the same unit the balance itself is shown in) at `ratePpm`, in `unit`:
+ * that's ratePpm * 10^precision / 1e6 sats, kept exact so a sub-sat price
+ * still shows.
  */
-private fun formatLbtcPerAssetUnit(ratePpm: ULong, unit: DisplayUnit): String {
-    val sats = java.math.BigDecimal(ratePpm.toLong()).movePointLeft(6)
+private fun formatLbtcPerAssetUnit(ratePpm: ULong, precision: Int, unit: DisplayUnit): String {
+    val sats = java.math.BigDecimal(ratePpm.toLong()).movePointLeft(6 - precision)
     val v = when (unit) {
         DisplayUnit.SAT -> sats
         DisplayUnit.MSAT -> sats.movePointRight(3)

@@ -86,6 +86,95 @@ fun formatAmountFull(msat: ULong?, unit: DisplayUnit): String {
     return "$value ${unit.label}"
 }
 
+// ── Issued assets ──────────────────────────────────────────────────────
+// Asset amounts travel as msat (1000 msat per base unit, the same scale
+// as L-BTC). One whole asset is 10^precision base units, so a balance is
+// shown as base_units / 10^precision: 100_000_001 base units of an
+// 8-decimal asset is "1.00000001".
+
+/**
+ * L-BTC's own asset id on Liquid mainnet and testnet. Older assetchan.py
+ * builds only recognise L-BTC by elementsd's "bitcoin" label, which testnet
+ * doesn't set, and report it by id - treat those ids as "lbtc".
+ */
+private val LBTC_ASSET_IDS = setOf(
+    "6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d", // mainnet
+    "144c654344aa716d6f3abcc1ca90e5641e4e2a7f633bc09fe3baf64585819a49", // testnet
+)
+
+/** "lbtc" for L-BTC (by name or by its asset id), else the id unchanged. */
+fun normalizeAssetId(id: String): String = if (id.lowercase() in LBTC_ASSET_IDS) "lbtc" else id
+
+/** Precision assumed for an asset ember doesn't describe (Liquid's usual 8). */
+const val DEFAULT_ASSET_PRECISION = 8
+
+/**
+ * Whole-asset amount with at most [precision] decimals (trailing zeros
+ * dropped), integer part grouped like the other amounts: "1 234.5".
+ * A sub-base-unit msat remainder is truncated, never rounded up.
+ */
+fun formatAssetUnits(msat: ULong?, precision: Int): String {
+    if (msat == null) return "—"
+    val plain = java.math.BigDecimal(java.math.BigInteger(msat.toString()))
+        .movePointLeft(precision + 3)
+        .setScale(precision, java.math.RoundingMode.DOWN)
+        .stripTrailingZeros()
+        .toPlainString()
+    val dot = plain.indexOf('.')
+    val int = if (dot == -1) plain else plain.substring(0, dot)
+    val frac = if (dot == -1) "" else plain.substring(dot)
+    return String.format(Locale.US, "%,d", java.math.BigInteger(int)).replace(',', ' ') + frac
+}
+
+/** Parse a whole-asset amount ("0.5") into msat; null if malformed or finer than one base unit. */
+fun parseAssetAmountToMsat(input: String, precision: Int): ULong? {
+    val t = input.trim().replace(" ", "")
+    if (t.isEmpty()) return null
+    val d = t.toBigDecimalOrNull() ?: return null
+    if (d.signum() < 0) return null
+    val base = d.movePointRight(precision)
+    if (base.stripTrailingZeros().scale() > 0) return null // finer than one base unit
+    val msat = base.toBigInteger().multiply(java.math.BigInteger.valueOf(1000))
+    return if (msat.bitLength() > 64) null else msat.toString().toULong()
+}
+
+/** ember's description of issued asset [id] (ids compared case-insensitively), if it has one. */
+fun assetInfoOf(id: String, assets: List<app.light.wallet.core.AssetInfo>?): app.light.wallet.core.AssetInfo? =
+    assets?.firstOrNull { it.id.equals(id, ignoreCase = true) }
+
+/** Symbol of issued asset [id]: ember's, else a shortened id. */
+fun assetSymbolOf(id: String, assets: List<app.light.wallet.core.AssetInfo>?): String =
+    assetInfoOf(id, assets)?.symbol ?: shortId(id, 4)
+
+/** Precision of issued asset [id]: ember's, else [DEFAULT_ASSET_PRECISION]. */
+fun assetPrecisionOf(id: String, assets: List<app.light.wallet.core.AssetInfo>?): Int =
+    assetInfoOf(id, assets)?.precision?.toInt() ?: DEFAULT_ASSET_PRECISION
+
+/**
+ * An amount in [asset] (null or "lbtc" = L-BTC), with its unit:
+ * "1 234 sats" / "0.5 USDt". [full] keeps sub-sat L-BTC precision.
+ */
+fun formatAmountIn(
+    msat: ULong?,
+    asset: String?,
+    assets: List<app.light.wallet.core.AssetInfo>?,
+    unit: DisplayUnit,
+    full: Boolean = false,
+): String =
+    if (asset == null || asset == "lbtc") {
+        if (full) formatAmountFull(msat, unit) else formatAmount(msat, unit) + " " + unit.label
+    } else {
+        formatAssetUnits(msat, assetPrecisionOf(asset, assets)) + " " + assetSymbolOf(asset, assets)
+    }
+
+/** Input filter for an asset amount: digits and one dot, at most [precision] decimals. */
+fun filterAssetAmountInput(s: String, precision: Int): String {
+    val c = s.filter { it.isDigit() || (precision > 0 && it == '.') }
+    val i = c.indexOf('.')
+    if (i == -1) return c
+    return c.substring(0, i + 1) + c.substring(i + 1).replace(".", "").take(precision)
+}
+
 fun satsToBtcLine(msat: ULong?): String =
     if (msat == null) "" else String.format(Locale.US, "%.8f", msat.toLong() / 100_000_000_000.0)
 

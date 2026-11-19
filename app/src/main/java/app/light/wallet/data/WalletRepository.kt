@@ -3,6 +3,8 @@ package app.light.wallet.data
 import app.light.wallet.BuildConfig
 import app.light.wallet.core.AssetBalance
 import app.light.wallet.core.AssetInfo
+import app.light.wallet.core.AssetUtxo
+import app.light.wallet.core.AssetWalletTx
 import app.light.wallet.core.AssetInvoiceResult
 import app.light.wallet.core.AssetQuote
 import app.light.wallet.core.CreateInvoiceParams
@@ -111,11 +113,21 @@ class WalletRepository(
     val invoices = MutableStateFlow<List<InvoiceEntry>?>(null)
     val pays = MutableStateFlow<List<PayListEntry>?>(null)
     val transactions = MutableStateFlow<List<WalletTx>?>(null)
+    /** The asset wallet's (elementsd's) side of on-chain history - CLN's [transactions] can't see assets. */
+    val assetTransactions = MutableStateFlow<List<AssetWalletTx>?>(null)
     val channels = MutableStateFlow<List<PeerChannel>?>(null)
     /** Assets ember supports for cross-asset payments - server-side config, fetched once per connect. */
     val assets = MutableStateFlow<List<AssetInfo>?>(null)
-    /** This node's own channel balance per asset - drives the Main dashboard's per-asset cards. */
+    /** This node's balance per asset (channels + on-chain asset wallet) - drives the Main dashboard's asset pages. */
     val assetBalances = MutableStateFlow<List<AssetBalance>?>(null)
+    /**
+     * L-BTC in the on-chain asset wallet (the node's own elementsd wallet,
+     * separate from CLN's): pays the fees of asset sends and asset channel
+     * opens. Topped up by hand with [topUpAssetWallet].
+     */
+    val assetWalletLbtcMsat = MutableStateFlow<ULong?>(null)
+    /** Unspent outputs of the on-chain asset wallet (not in [funds] - CLN's wallet never sees them). */
+    val assetUtxos = MutableStateFlow<List<AssetUtxo>?>(null)
 
     // One in-flight fetch per data kind, conflated to the latest request: a
     // refresh fired right after an action (pay, create invoice) cancels the
@@ -152,16 +164,44 @@ class WalletRepository(
         }
     }
 
-    fun refreshTransactions() = fetch("transactions") {
-        node?.let { transactions.value = it.listTransactions() }
+    fun refreshTransactions(): kotlinx.coroutines.Job {
+        // Older node images lack the RPC: the fetch just fails and the
+        // page shows CLN's history alone.
+        val assetJob = fetch("assetTransactions") {
+            node?.let { n ->
+                assetTransactions.value = n.listAssetTransactions().map { t ->
+                    t.copy(
+                        // Per asset again after mapping L-BTC's id to "lbtc".
+                        amounts = t.amounts
+                            .groupBy { app.light.wallet.ui.normalizeAssetId(it.asset) }
+                            .map { (a, xs) -> app.light.wallet.core.AssetTxAmount(a, xs.sumOf { it.amountMsat }) }
+                            .filter { it.amountMsat != 0L },
+                        outputs = t.outputs.map { it.copy(asset = app.light.wallet.ui.normalizeAssetId(it.asset)) },
+                    )
+                }
+            }
+        }
+        val clnJob = fetch("transactions") { node?.let { transactions.value = it.listTransactions() } }
+        return scope.launch { assetJob.join(); clnJob.join() }
     }
 
     fun refreshChannels() = fetch("channels") { node?.let { channels.value = it.listChannels() } }
 
     fun refreshAssets() = fetch("assets") { node?.let { assets.value = it.listAssets() } }
 
-    fun refreshAssetBalances() = fetch("assetBalances") {
-        node?.let { assetBalances.value = it.listAssetBalances() }
+    fun refreshAssetBalances(): kotlinx.coroutines.Job {
+        refreshAssetUtxos() // same wallet, so they go stale together
+        return fetch("assetBalances") {
+            node?.let {
+                val r = it.listAssetBalances()
+                assetBalances.value = r.balances
+                assetWalletLbtcMsat.value = r.assetWalletLbtcMsat
+            }
+        }
+    }
+
+    fun refreshAssetUtxos() = fetch("assetUtxos") {
+        node?.let { n -> assetUtxos.value = n.listAssetUtxos().map { it.copy(asset = app.light.wallet.ui.normalizeAssetId(it.asset)) } }
     }
 
     /** Refresh getinfo so the current block height (used for tx ages/confs) advances. */
@@ -180,11 +220,11 @@ class WalletRepository(
         // price from ember (`ember-cli set-price-pair`), shown on Main.
         // Cheap - ember answers from its own config/DB, no node call.
         refreshAssetBalances(); refreshAssets()
+        // The asset pages' Lightning balance is summed from live channels.
+        refreshChannels()
     }
 
-    fun refreshAll() {
-        refreshMain(); refreshChannels()
-    }
+    fun refreshAll() = refreshMain()
 
     @Volatile
     var node: LightNode? = null
@@ -496,6 +536,47 @@ class WalletRepository(
     ): PayAssetInvoiceResult =
         requireNode().payAssetInvoice(wrapped, tier, fromAsset, fromAmountMsat).also {
             refreshPays(); refreshFunds()
+        }
+
+    // ------------------------------------------------------------------
+    // On-chain asset wallet (the node's own elementsd wallet: CLN's
+    // wallet only ever holds L-BTC)
+    // ------------------------------------------------------------------
+
+    /** A fresh asset-wallet address: receives any issued asset, and L-BTC sent here tops up its fee balance. */
+    suspend fun newAssetAddress(): String = requireNode().newAssetAddress()
+
+    /** Sends [amountMsat] (1000 msat per asset base unit) of [asset] on-chain; returns the txid. */
+    suspend fun sendAsset(address: String, asset: String, amountMsat: ULong): String =
+        requireNode().sendAsset(address, asset, amountMsat).also { refreshAssetBalances() }
+
+    /**
+     * Moves [amountSat] L-BTC from CLN's on-chain wallet to the asset
+     * wallet, where it pays asset fees. A plain on-chain send: usable once
+     * it confirms (~1 block). Returns the txid.
+     */
+    suspend fun topUpAssetWallet(amountSat: ULong, feerate: String?): String {
+        val n = requireNode()
+        val address = n.newAssetAddress()
+        val r = n.withdraw(
+            app.light.wallet.core.WithdrawParams(
+                destination = address, amountSat = amountSat, all = false,
+                minconf = null, feerate = feerate,
+            ),
+        )
+        refreshFunds(); refreshAssetBalances()
+        return r.txid
+    }
+
+    /** Opens a channel in [asset] funded from the asset wallet; [peerId] must already be connected. */
+    suspend fun openAssetChannel(
+        peerId: String,
+        asset: String,
+        amountMsat: ULong,
+        announce: Boolean,
+    ): app.light.wallet.core.OpenAssetChannelResult =
+        requireNode().openAssetChannel(peerId, asset, amountMsat, null, announce).also {
+            refreshAssetBalances(); refreshChannels(); refreshFunds()
         }
 
     /** The shared swap-service node to connect to by default when opening a channel - `null` if unconfigured. */

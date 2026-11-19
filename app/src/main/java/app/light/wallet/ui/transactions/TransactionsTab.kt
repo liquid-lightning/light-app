@@ -40,13 +40,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.light.wallet.core.AssetInfo
+import app.light.wallet.core.AssetWalletTx
 import app.light.wallet.core.OnchainOutput
 import app.light.wallet.core.WalletTx
 import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.DisplayUnit
 import app.light.wallet.ui.PullRefreshBox
+import app.light.wallet.ui.assetPrecisionOf
+import app.light.wallet.ui.assetSymbolOf
 import app.light.wallet.ui.formatAmount
+import app.light.wallet.ui.formatAssetUnits
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.theme.MonoFont
 import app.light.wallet.ui.theme.SpaceGrotesk
@@ -83,6 +88,8 @@ fun TransactionsTab(
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
     val txs by repository.transactions.collectAsState()
+    val assetTxs by repository.assetTransactions.collectAsState()
+    val assets by repository.assets.collectAsState()
     val funds by repository.funds.collectAsState()
     val connState by repository.connState.collectAsState()
     var expandedTx by remember { mutableStateOf<String?>(null) }
@@ -107,13 +114,27 @@ fun TransactionsTab(
     }
     val tip = (connState as? ConnState.Connected)?.info?.blockheight ?: 0u
 
+    // One entry per txid, from CLN's wallet, the asset wallet, or both
+    // (e.g. a top-up: L-BTC leaves one and lands in the other). Newest
+    // first: unconfirmed on top, then descending height.
+    val entries = remember(txs, assetTxs) {
+        val byId = LinkedHashMap<String, TxEntry>()
+        txs.orEmpty().forEach { byId[it.txid] = TxEntry(it.txid, it.blockheight, it, null) }
+        assetTxs.orEmpty().forEach { a ->
+            val e = byId[a.txid]
+            byId[a.txid] = e?.copy(asset = a, blockheight = maxOf(e.blockheight, a.blockheight))
+                ?: TxEntry(a.txid, a.blockheight, null, a)
+        }
+        byId.values.toList().asReversed().sortedByDescending { if (it.blockheight == 0u) UInt.MAX_VALUE else it.blockheight }
+    }
+
     PullRefreshBox(
         refreshing = refreshing,
         onRefresh = {
             refreshing = true
             uiScope.launch {
-                repository.refreshTransactions().join()
-                repository.refreshFunds().join()
+                val t = repository.refreshTransactions()
+                repository.refreshFunds().join(); t.join()
                 refreshing = false
             }
         },
@@ -127,10 +148,10 @@ fun TransactionsTab(
                 modifier = Modifier.padding(bottom = 14.dp),
             )
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // listtransactions returns oldest-first; show newest on top.
-                items(txs.orEmpty().asReversed(), key = { it.txid }) { tx ->
+                items(entries, key = { it.txid }) { tx ->
                     TxCard(
                         tx = tx,
+                        assets = assets,
                         tracked = tracked,
                         tip = tip,
                         unit = unit,
@@ -139,7 +160,7 @@ fun TransactionsTab(
                         onOpen = { path -> openExplorer(context, repository.network, path) },
                     )
                 }
-                if (txs.orEmpty().isEmpty()) {
+                if (entries.isEmpty()) {
                     item {
                         Text(
                             if (txs == null) "Loading…" else "No on-chain transactions yet.",
@@ -153,9 +174,32 @@ fun TransactionsTab(
     }
 }
 
+/** One amount line of a list card; [transfer] = moved between own wallets. */
+private data class TxLine(val asset: String, val msat: Long, val transfer: Boolean = false)
+
+/** One on-chain transaction as either wallet (or both) sees it. */
+private data class TxEntry(
+    val txid: String,
+    /** 0 = unconfirmed. */
+    val blockheight: UInt,
+    /** CLN's wallet (L-BTC) side, if it took part. */
+    val cln: WalletTx?,
+    /** The asset wallet's side, if it took part: net change per asset. */
+    val asset: AssetWalletTx?,
+)
+
+/** "+1.5 WDODGE" / "−1 234" (L-BTC in the display unit, no label - as before). */
+private fun signedAmount(msat: Long, assetId: String, assets: List<AssetInfo>?, unit: DisplayUnit): String {
+    val sign = if (msat >= 0) "+" else "−"
+    val abs = kotlin.math.abs(msat).toULong()
+    return if (assetId == "lbtc") sign + formatAmount(abs, unit)
+    else sign + formatAssetUnits(abs, assetPrecisionOf(assetId, assets)) + " " + assetSymbolOf(assetId, assets)
+}
+
 @Composable
 private fun TxCard(
-    tx: WalletTx,
+    tx: TxEntry,
+    assets: List<AssetInfo>?,
     tracked: Map<Pair<String, UInt>, OnchainOutput>,
     tip: UInt,
     unit: DisplayUnit,
@@ -163,9 +207,40 @@ private fun TxCard(
     onToggle: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
-    val ins = tx.inputs.mapNotNull { i -> tracked[i.txid to i.index]?.let { i to it } }
-    val outs = tx.outputs.mapNotNull { o -> tracked[tx.txid to o.index]?.let { o to it } }
-    val netMsat = outs.sumOf { it.second.amountMsat.toLong() } - ins.sumOf { it.second.amountMsat.toLong() }
+    val ins = tx.cln?.inputs.orEmpty().mapNotNull { i -> tracked[i.txid to i.index]?.let { i to it } }
+    val outs = tx.cln?.outputs.orEmpty().mapNotNull { o -> tracked[tx.txid to o.index]?.let { o to it } }
+    val assetAmounts = tx.asset?.amounts.orEmpty()
+    // CLN's side: the fee output only counts as ours if we funded the tx.
+    val clnFeeMsat = if (ins.isNotEmpty()) (tx.cln?.feeMsat ?: 0uL).toLong() else 0L
+    val clnNetMsat = outs.sumOf { it.second.amountMsat.toLong() } - ins.sumOf { it.second.amountMsat.toLong() } + clnFeeMsat
+    val feeMsat = clnFeeMsat + (tx.asset?.feeMsat ?: 0uL).toLong()
+    // The list: issued assets moved, plus the main wallet's L-BTC - the fee
+    // and the Elements wallet's L-BTC (e.g. a top-up landing there) only
+    // show in the details. With neither, the Elements wallet's L-BTC.
+    val elementsLbtcMsat = assetAmounts.filter { it.asset == "lbtc" }.sumOf { it.amountMsat }
+    val assetLines = assetAmounts.filter { it.asset != "lbtc" && it.amountMsat != 0L }.map { TxLine(it.asset, it.amountMsat) }
+    // Main wallet -> Elements wallet (a fee top-up): exactly what left one
+    // landed in the other - a transfer between own wallets, not a spend.
+    val topUp = tx.cln != null && clnNetMsat < 0L && elementsLbtcMsat == -clnNetMsat
+    val lines = when {
+        topUp -> assetLines + TxLine("lbtc", elementsLbtcMsat, transfer = true)
+        tx.cln != null && (clnNetMsat != 0L || assetLines.isEmpty()) -> assetLines + TxLine("lbtc", clnNetMsat)
+        assetLines.isNotEmpty() -> assetLines
+        else -> listOf(TxLine("lbtc", elementsLbtcMsat))
+    }.let { ls ->
+        if (ls.any { it.msat != 0L }) ls
+        else {
+            // Nothing net, fee aside: a transfer within own wallets (e.g.
+            // a self-send that only regrouped outputs). Show what moved.
+            val clnMoved = if (ins.isNotEmpty()) outs.sumOf { it.second.amountMsat.toLong() } else 0L
+            val elementsMoved = tx.asset?.outputs.orEmpty().filter { it.amountMsat > 0L }
+                .groupBy { it.asset }.mapValues { (_, xs) -> xs.sumOf { it.amountMsat } }
+            val moved = (elementsMoved + ("lbtc" to (elementsMoved["lbtc"] ?: 0L) + clnMoved))
+                .filterValues { it != 0L }
+                .map { (a, m) -> TxLine(a, m, transfer = true) }
+            moved.ifEmpty { ls }
+        }
+    }
     val confirmed = tx.blockheight > 0u
     val conf = if (confirmed && tip >= tx.blockheight) (tip - tx.blockheight + 1u) else 0u
 
@@ -197,11 +272,20 @@ private fun TxCard(
                 )
             }
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    (if (netMsat >= 0) "+" else "−") + formatAmount(kotlin.math.abs(netMsat).toULong(), unit),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
-                    color = if (netMsat >= 0) Tokens.Green else Tokens.Text,
-                )
+                lines.forEach { l ->
+                    // A transfer between own wallets: no sign, and neither
+                    // the green of income nor the white of a spend.
+                    val text = signedAmount(l.msat, l.asset, assets, unit).let { if (l.transfer) it.drop(1) else it }
+                    Text(
+                        text + if (l.asset == "lbtc") " ${unit.label}" else "",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+                        color = when {
+                            l.transfer -> Tokens.Dim
+                            l.msat >= 0 -> Tokens.Green
+                            else -> Tokens.Text
+                        },
+                    )
+                }
                 Text(
                     if (confirmed) "Confirmed" else "Unconfirmed",
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
@@ -262,8 +346,23 @@ private fun TxCard(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                if (feeMsat > 0L) {
+                    WalletAmountRow("Fee", formatAmount(feeMsat.toULong(), unit) + " ${unit.label}", null)
+                }
+                // The Elements (asset) wallet's side: what moved to/from
+                // which address - e.g. where a top-up landed.
+                val elements = tx.asset?.outputs.orEmpty()
+                if (elements.isNotEmpty()) {
+                    Text("Elements wallet", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold), color = Tokens.Faint)
+                    elements.forEach { o ->
+                        ElementsRow(
+                            address = o.address,
+                            amount = signedAmount(o.amountMsat, o.asset, assets, unit) + if (o.asset == "lbtc") " ${unit.label}" else "",
+                        ) { if (o.address.isNotBlank()) onOpen("address/${o.address}") }
+                    }
+                }
                 Text(
-                    "Only inputs and outputs tracked by your CLN node are shown.",
+                    "Only inputs and outputs tracked by your CLN node are shown below.",
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 18.sp),
                     color = Tokens.Dim,
                 )
@@ -295,6 +394,56 @@ private fun TxCard(
     }
 }
 
+/** A label/amount row in the details; [msat] (null = neutral) colours the amount like the list does. */
+@Composable
+private fun WalletAmountRow(label: String, amount: String, msat: Long?) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Tokens.CardDeep, RoundedCornerShape(11.dp))
+            .border(1.dp, Tokens.Border, RoundedCornerShape(11.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+            color = Tokens.TextMid, modifier = Modifier.weight(1f),
+        )
+        Text(
+            amount,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold),
+            color = if (msat != null && msat >= 0) Tokens.Green else Tokens.Text,
+        )
+    }
+}
+
+@Composable
+private fun ElementsRow(address: String, amount: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Tokens.CardDeep, RoundedCornerShape(11.dp))
+            .border(1.dp, Tokens.Border, RoundedCornerShape(11.dp))
+            .noRipple(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            address.ifBlank { "—" },
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, fontFamily = MonoFont),
+            color = Tokens.TextMid, maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            amount,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold),
+            color = Tokens.Text,
+        )
+    }
+}
+
 @Composable
 private fun IoRow(vout: UInt, utxo: OnchainOutput, unit: DisplayUnit, onClick: () -> Unit) {
     Row(
@@ -320,7 +469,7 @@ private fun IoRow(vout: UInt, utxo: OnchainOutput, unit: DisplayUnit, onClick: (
         )
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                formatAmount(utxo.amountMsat, unit),
+                formatAmount(utxo.amountMsat, unit) + " ${unit.label}",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold),
                 color = Tokens.Text,
             )

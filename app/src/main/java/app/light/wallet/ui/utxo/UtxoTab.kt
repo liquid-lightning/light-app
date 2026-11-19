@@ -36,12 +36,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.light.wallet.core.OnchainOutput
 import app.light.wallet.data.ConnState
 import app.light.wallet.data.WalletRepository
 import app.light.wallet.ui.DisplayUnit
 import app.light.wallet.ui.PullRefreshBox
+import app.light.wallet.ui.assetPrecisionOf
+import app.light.wallet.ui.assetSymbolOf
 import app.light.wallet.ui.formatAmount
+import app.light.wallet.ui.formatAssetUnits
 import app.light.wallet.ui.noRipple
 import app.light.wallet.ui.theme.MonoFont
 import app.light.wallet.ui.theme.SpaceGrotesk
@@ -52,11 +54,31 @@ import kotlinx.coroutines.launch
 
 private val FILTERS = listOf("unconfirmed", "confirmed", "spent", "immature")
 
+/**
+ * One row of the list: an output of CLN's own wallet (L-BTC) or of the
+ * node's on-chain asset wallet (elementsd - any asset, plus the L-BTC that
+ * pays its fees). [confirmations] only orders the list.
+ */
+private data class UtxoItem(
+    val txid: String,
+    val vout: UInt,
+    val address: String?,
+    val status: String,
+    val amount: String,
+    /** Shown under the status: which wallet (and, for L-BTC, which coin) the output is. */
+    val tag: String?,
+    /** From the asset wallet (elementsd) rather than CLN's own: highlighted. */
+    val assetWallet: Boolean = false,
+    val confirmations: Long,
+)
+
 @Composable
 fun UtxoTab(repository: WalletRepository) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
     val funds by repository.funds.collectAsState()
+    val assetUtxos by repository.assetUtxos.collectAsState()
+    val assets by repository.assets.collectAsState()
     val connState by repository.connState.collectAsState()
     var filter by remember { mutableStateOf("confirmed") }
     var refreshing by remember { mutableStateOf(false) }
@@ -66,26 +88,50 @@ fun UtxoTab(repository: WalletRepository) {
         // Gate on Connected, not just `node != null` - see MainTab's
         // identical comment on why.
         if (connState is ConnState.Connected && repository.funds.value == null) repository.refreshFunds()
+        if (connState is ConnState.Connected && repository.assetUtxos.value == null) repository.refreshAssetUtxos()
     }
 
-    // Newest first: unconfirmed (no height) on top, then descending height.
-    val utxos = remember(funds, filter) {
-        funds?.outputs.orEmpty()
-            .filter { it.status == filter }
-            .sortedByDescending { it.blockheight ?: UInt.MAX_VALUE }
+    // Newest first: unconfirmed on top, then fewest confirmations.
+    val tip = (connState as? ConnState.Connected)?.info?.blockheight?.toLong()
+    val utxos = remember(funds, assetUtxos, assets, filter, unit, tip) {
+        val cln = funds?.outputs.orEmpty().map { o ->
+            UtxoItem(
+                txid = o.txid, vout = o.output, address = o.address, status = o.status,
+                amount = formatAmount(o.amountMsat, unit) + " " + unit.label, tag = "L-BTC · main wallet",
+                confirmations = o.blockheight?.let { h -> tip?.let { it - h.toLong() + 1 } ?: 1L } ?: 0L,
+            )
+        }
+        // The asset wallet only reports what's unspent: never "spent"/"immature".
+        val assetWallet = assetUtxos.orEmpty().map { u ->
+            val isLbtc = u.asset == "lbtc"
+            UtxoItem(
+                txid = u.txid, vout = u.vout, address = u.address.ifBlank { null },
+                status = if (u.confirmations == 0u) "unconfirmed" else "confirmed",
+                amount = if (isLbtc) formatAmount(u.amountMsat, unit) + " " + unit.label
+                else formatAssetUnits(u.amountMsat, assetPrecisionOf(u.asset, assets)) + " " + assetSymbolOf(u.asset, assets),
+                tag = if (isLbtc) "L-BTC · asset wallet" else "asset wallet",
+                assetWallet = true,
+                confirmations = u.confirmations.toLong(),
+            )
+        }
+        (cln + assetWallet).filter { it.status == filter }.sortedBy { it.confirmations }
     }
 
     PullRefreshBox(
         refreshing = refreshing,
         onRefresh = {
             refreshing = true
-            uiScope.launch { repository.refreshFunds().join(); refreshing = false }
+            uiScope.launch {
+                val a = repository.refreshAssetUtxos()
+                repository.refreshFunds().join(); a.join()
+                refreshing = false
+            }
         },
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
             Text("UTXOs", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
             Text(
-                "On-chain outputs",
+                "On-chain outputs · L-BTC wallet and asset wallet",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                 color = Tokens.Faint,
                 modifier = Modifier.padding(bottom = 14.dp),
@@ -115,8 +161,8 @@ fun UtxoTab(repository: WalletRepository) {
                 modifier = Modifier.padding(top = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(utxos, key = { "${it.txid}:${it.output}" }) { u ->
-                    UtxoRow(u, unit) {
+                items(utxos, key = { "${it.txid}:${it.vout}" }) { u ->
+                    UtxoRow(u) {
                         // Address page shows the UTXO's full life; fall back to
                         // the funding tx when the node reports no address.
                         val path = u.address?.let { a -> "address/$a" } ?: "tx/${u.txid}"
@@ -140,7 +186,7 @@ fun UtxoTab(repository: WalletRepository) {
 }
 
 @Composable
-private fun UtxoRow(u: OnchainOutput, unit: DisplayUnit, onClick: () -> Unit) {
+private fun UtxoRow(u: UtxoItem, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -157,7 +203,7 @@ private fun UtxoRow(u: OnchainOutput, unit: DisplayUnit, onClick: () -> Unit) {
         ) { Icon(Icons.Outlined.ViewInAr, null, tint = Tokens.Accent, modifier = Modifier.size(15.dp)) }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                "${u.txid.take(6)}…${u.txid.takeLast(5)}:${u.output}",
+                "${u.txid.take(6)}…${u.txid.takeLast(5)}:${u.vout}",
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold),
             )
             Text(
@@ -168,7 +214,7 @@ private fun UtxoRow(u: OnchainOutput, unit: DisplayUnit, onClick: () -> Unit) {
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
-                formatAmount(u.amountMsat, unit),
+                u.amount,
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = SpaceGrotesk, fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
             )
             Text(
@@ -176,6 +222,9 @@ private fun UtxoRow(u: OnchainOutput, unit: DisplayUnit, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
                 color = utxoStatusColor(u.status),
             )
+            u.tag?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp), color = Tokens.Faint)
+            }
         }
     }
 }

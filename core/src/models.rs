@@ -111,6 +111,10 @@ pub struct Funds {
     pub outputs: Vec<OnchainOutput>,
     pub channels: Vec<FundsChannel>,
     // Convenience aggregates (computed in Rust so every UI gets them for free).
+    /// Confirmed and still free: excludes outputs `reserved` as inputs of a
+    /// broadcast-but-unmined send (CLN keeps those "confirmed" until the
+    /// spend is mined, so counting them would show the old UTXO alongside
+    /// the send's own change).
     pub onchain_confirmed_msat: u64,
     pub onchain_unconfirmed_msat: u64,
     pub outbound_msat: u64,
@@ -129,6 +133,11 @@ pub struct PeerChannel {
     pub peer_alias: Option<String>,
     pub peer_connected: bool,
     pub state: String,
+    /// Liquid asset channels only: the issued asset id (as elements-cli
+    /// prints it) the channel's balance is in - every `*_msat` amount
+    /// below is then that asset's msat (1000 per base unit), not L-BTC.
+    /// None for ordinary L-BTC channels.
+    pub asset: Option<String>,
     pub channel_id: Option<String>,
     pub short_channel_id: Option<String>,
     pub funding_txid: Option<String>,
@@ -325,6 +334,11 @@ pub struct InvoiceEntry {
     pub label: String,
     pub description: Option<String>,
     pub payment_hash: String,
+    /// The issued asset an asset invoice is in (assetchan-invoice notes it
+    /// in the datastore under assetchan/invoice/<payment_hash>); None for
+    /// an ordinary L-BTC invoice. Its `*_msat` amounts are then that
+    /// asset's msat (1000 per base unit).
+    pub asset: Option<String>,
     /// unpaid | paid | expired
     pub status: String,
     pub expires_at: u64,
@@ -498,6 +512,9 @@ pub struct WalletTx {
     pub blockheight: u32,
     pub inputs: Vec<WalletTxInput>,
     pub outputs: Vec<WalletTxOutput>,
+    /// The tx's explicit Liquid fee output (empty scriptPubKey), whoever
+    /// paid it - ours only when the tx spends our inputs.
+    pub fee_msat: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +529,10 @@ pub struct AssetInfo {
     pub id: String,
     pub symbol: String,
     pub name: String,
+    /// Decimal places of one whole unit (Liquid asset precision): amounts
+    /// stay in msat (1000 msat per base unit) and display as
+    /// `base_units / 10^precision`. 8 when ember doesn't say.
+    pub precision: u32,
     /// Reference price from ember's price pairs - `None` when no pair
     /// prices this asset.
     pub price: Option<AssetPrice>,
@@ -563,13 +584,82 @@ pub struct PayAssetInvoiceResult {
     pub status: String,
 }
 
-/// One entry of `list_asset_balances` - this node's own channel balance in
-/// one asset ("lbtc" for ordinary L-BTC channels).
+/// One entry of `list_asset_balances` - this node's balance in one asset
+/// ("lbtc" for ordinary L-BTC channels): in its channels, and on-chain in
+/// its asset wallet (always 0 for "lbtc", whose on-chain funds are CLN's
+/// own wallet - see `list_funds`).
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct AssetBalance {
     pub asset: String,
     pub channel_balance_msat: u64,
     pub onchain_balance_msat: u64,
+}
+
+/// Result of `list_asset_balances`: per-asset balances, plus the L-BTC in
+/// the asset wallet, which pays the on-chain fees of asset sends and asset
+/// channel opens (Liquid fees are always L-BTC).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetBalances {
+    pub balances: Vec<AssetBalance>,
+    pub asset_wallet_lbtc_msat: u64,
+}
+
+/// Net change of one asset in an asset-wallet transaction.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetTxAmount {
+    /// "lbtc" for L-BTC, else the asset id.
+    pub asset: String,
+    /// Signed; 1000 msat per base unit.
+    pub amount_msat: i64,
+}
+
+/// One transaction of the node's on-chain asset wallet (elementsd) - the
+/// asset side CLN's own `list_transactions` can't see.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetWalletTx {
+    pub txid: String,
+    /// 0 = unconfirmed.
+    pub blockheight: u32,
+    pub time: u64,
+    /// Net change per asset, the fee excluded.
+    pub amounts: Vec<AssetTxAmount>,
+    /// L-BTC fee this wallet paid (0 if it didn't fund the tx).
+    pub fee_msat: u64,
+    /// Each wallet entry: what moved to/from which address.
+    pub outputs: Vec<AssetTxOutput>,
+}
+
+/// One entry of an asset-wallet transaction.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetTxOutput {
+    /// "lbtc" for L-BTC, else the asset id.
+    pub asset: String,
+    /// Signed; 1000 msat per base unit.
+    pub amount_msat: i64,
+    /// Ours for a receive, the destination for a send.
+    pub address: String,
+}
+
+/// One unspent output of the node's on-chain asset wallet (its own
+/// elementsd wallet - CLN's `list_funds` never sees these).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct AssetUtxo {
+    pub txid: String,
+    pub vout: u32,
+    /// "lbtc" for the wallet's L-BTC fee balance, else the asset id.
+    pub asset: String,
+    /// 1000 msat per base unit.
+    pub amount_msat: u64,
+    pub address: String,
+    /// 0 = unconfirmed.
+    pub confirmations: u32,
+}
+
+/// Result of `open_asset_channel`.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct OpenAssetChannelResult {
+    pub txid: String,
+    pub channel_id: String,
 }
 
 /// Result of `get_swap_service`: the shared swap-service node every

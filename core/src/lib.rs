@@ -398,6 +398,7 @@ impl LightNode {
                 id: a.id,
                 symbol: a.symbol,
                 name: a.name,
+                precision: a.precision.unwrap_or(8),
                 price: a.price.map(|p| AssetPrice {
                     from_asset: p.from_asset,
                     rate_ppm: p.rate_ppm,
@@ -482,18 +483,111 @@ impl LightNode {
         })
     }
 
-    /// This node's own channel balance per asset - drives the per-asset
-    /// balance cards on the Main dashboard.
-    pub async fn list_asset_balances(&self) -> CoreResult<Vec<AssetBalance>> {
-        let balances = self.ember.assets().balances().await.map_err(rpc_err)?;
-        Ok(balances
+    /// This node's balance per asset (channels + its on-chain asset wallet)
+    /// and the asset wallet's L-BTC for fees - drives the per-asset pages
+    /// on the Main dashboard.
+    pub async fn list_asset_balances(&self) -> CoreResult<AssetBalances> {
+        let r = self.ember.assets().balances().await.map_err(rpc_err)?;
+        Ok(AssetBalances {
+            balances: r
+                .balances
+                .into_iter()
+                .map(|b| AssetBalance {
+                    asset: b.asset,
+                    channel_balance_msat: b.channel_balance_msat,
+                    onchain_balance_msat: b.onchain_balance_msat,
+                })
+                .collect(),
+            asset_wallet_lbtc_msat: r.asset_wallet_lbtc_msat,
+        })
+    }
+
+    /// Transaction history of this node's on-chain asset wallet: per tx
+    /// the net change per asset - merged into the Transactions page.
+    pub async fn list_asset_transactions(&self) -> CoreResult<Vec<AssetWalletTx>> {
+        let txs = self.ember.assets().transactions().await.map_err(rpc_err)?;
+        Ok(txs
             .into_iter()
-            .map(|b| AssetBalance {
-                asset: b.asset,
-                channel_balance_msat: b.channel_balance_msat,
-                onchain_balance_msat: b.onchain_balance_msat,
+            .map(|t| AssetWalletTx {
+                txid: t.txid,
+                blockheight: t.blockheight,
+                time: t.time,
+                fee_msat: t.fee_msat,
+                outputs: t
+                    .outputs
+                    .into_iter()
+                    .map(|o| AssetTxOutput { asset: o.asset, amount_msat: o.amount_msat, address: o.address })
+                    .collect(),
+                amounts: t
+                    .amounts
+                    .into_iter()
+                    .map(|a| AssetTxAmount { asset: a.asset, amount_msat: a.amount_msat })
+                    .collect(),
             })
             .collect())
+    }
+
+    /// Unspent outputs of this node's on-chain asset wallet, unconfirmed
+    /// ones included - the UTXO page lists them next to CLN's own.
+    pub async fn list_asset_utxos(&self) -> CoreResult<Vec<AssetUtxo>> {
+        let utxos = self.ember.assets().utxos().await.map_err(rpc_err)?;
+        Ok(utxos
+            .into_iter()
+            .map(|u| AssetUtxo {
+                txid: u.txid,
+                vout: u.vout,
+                asset: u.asset,
+                amount_msat: u.amount_msat,
+                address: u.address,
+                confirmations: u.confirmations,
+            })
+            .collect())
+    }
+
+    /// A fresh address of this node's on-chain asset wallet. Receives any
+    /// issued asset; L-BTC sent here tops up the wallet's fee balance.
+    /// (CLN's own wallet - `new_address` - only ever sees L-BTC.)
+    pub async fn new_asset_address(&self) -> CoreResult<String> {
+        self.ember.assets().new_address().await.map_err(rpc_err)
+    }
+
+    /// Sends `amount_msat` (1000 msat per base unit) of `asset` from the
+    /// asset wallet to `address`; returns the txid. Fees come from the
+    /// asset wallet's own L-BTC.
+    pub async fn send_asset(
+        &self,
+        address: String,
+        asset: String,
+        amount_msat: u64,
+    ) -> CoreResult<String> {
+        self.ember
+            .assets()
+            .send(address, asset, amount_msat)
+            .await
+            .map_err(rpc_err)
+    }
+
+    /// Opens a channel in `asset` to the already-connected `peer_id`,
+    /// funded from the asset wallet (`fee_reserve_sat`: L-BTC put beside
+    /// the asset for the channel's on-chain fees; `None` = node default).
+    pub async fn open_asset_channel(
+        &self,
+        peer_id: String,
+        asset: String,
+        amount_msat: u64,
+        fee_reserve_sat: Option<u64>,
+        announce: bool,
+    ) -> CoreResult<OpenAssetChannelResult> {
+        let r = self
+            .ember
+            .assets()
+            .open_channel(peer_id, asset, amount_msat, fee_reserve_sat, announce)
+            .await
+            .map_err(rpc_err)?;
+        Ok(OpenAssetChannelResult {
+            txid: r.txid,
+            channel_id: r.channel_id,
+        })
     }
 
     /// The shared swap-service node to connect to by default when opening
@@ -585,7 +679,7 @@ impl LightNode {
 
         let onchain_confirmed_msat = outputs
             .iter()
-            .filter(|o| o.status == "confirmed")
+            .filter(|o| o.status == "confirmed" && !o.reserved)
             .map(|o| o.amount_msat)
             .sum();
         let onchain_unconfirmed_msat = outputs
@@ -787,6 +881,7 @@ impl LightNode {
                     peer_alias: aliases.get(&ch.peer_id).cloned().flatten(),
                     peer_connected: ch.peer_connected,
                     state: channel_state_name(ch.state),
+                    asset: ch.asset.as_ref().map(|b| hexs(b)),
                     channel_id: ch.channel_id.as_ref().map(|b| hexs(b)),
                     short_channel_id: ch.short_channel_id.clone(),
                     funding_txid: ch.funding_txid.as_ref().map(|b| hexs(b)),
@@ -959,12 +1054,32 @@ impl LightNode {
         };
         let mut c = self.client.lock().await.clone();
         let r = c.list_invoices(req).await.map_err(rpc_err)?.into_inner();
+        // payment_hash -> asset, for asset invoices. Best effort: a node
+        // without assetchan.py simply has no such entries.
+        let invoice_assets: std::collections::HashMap<String, String> = c
+            .list_datastore(cln::ListdatastoreRequest {
+                key: vec!["assetchan".to_string(), "invoice".to_string()],
+            })
+            .await
+            .map(|r| {
+                r.into_inner()
+                    .datastore
+                    .into_iter()
+                    .filter(|e| e.key.len() == 3)
+                    .filter_map(|e| Some((e.key[2].clone(), e.string?)))
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(r.invoices
             .iter()
             .map(|i| InvoiceEntry {
                 label: i.label.clone(),
                 description: i.description.clone(),
                 payment_hash: hexs(&i.payment_hash),
+                asset: invoice_assets
+                    .get(&hexs(&i.payment_hash))
+                    .filter(|a| a.as_str() != "lbtc")
+                    .cloned(),
                 status: match i.status {
                     0 => "unpaid",
                     1 => "paid",
@@ -1184,6 +1299,12 @@ impl LightNode {
                         amount_msat: o.amount_msat.as_ref().map(|a| a.msat).unwrap_or(0),
                     })
                     .collect(),
+                fee_msat: t
+                    .outputs
+                    .iter()
+                    .filter(|o| o.script_pub_key.is_empty())
+                    .map(|o| o.amount_msat.as_ref().map(|a| a.msat).unwrap_or(0))
+                    .sum(),
             })
             .collect())
     }

@@ -604,6 +604,33 @@ pub struct AssetBalances {
     pub asset_wallet_lbtc_msat: u64,
 }
 
+/// Result of `get_faucet`: the testnet faucet for one asset.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FaucetInfo {
+    /// False when there's no faucet for the asset (nothing else is set).
+    pub enabled: bool,
+    /// What one claim pays out, 1000 msat per base unit.
+    pub amount_msat: u64,
+    /// What the faucet still holds; None when the server couldn't read it.
+    pub balance_msat: Option<u64>,
+    pub interval_secs: u64,
+    /// Unix time this node may claim again; 0 = now.
+    pub next_claim_at: u64,
+    /// This node is exempt from the cooldown.
+    pub unlimited: bool,
+}
+
+/// Result of `claim_faucet`.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FaucetClaim {
+    pub txid: String,
+    pub amount_msat: u64,
+    /// Where it went: the asset wallet, or CLN's wallet for L-BTC.
+    pub address: String,
+    /// Unix time this node may claim again; 0 = now.
+    pub next_claim_at: u64,
+}
+
 /// Net change of one asset in an asset-wallet transaction.
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct AssetTxAmount {

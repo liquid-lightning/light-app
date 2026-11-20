@@ -129,6 +129,7 @@ fun SheetHost(
                 is WalletSheet.SendChain -> SendChainSheet(repository, onClose)
                 is WalletSheet.SendAsset -> SendAssetSheet(repository, sheet, onOpenSheet, onClose)
                 is WalletSheet.TopUpAssetWallet -> TopUpAssetWalletSheet(repository, onClose)
+                is WalletSheet.Faucet -> FaucetSheet(repository, sheet, onClose)
                 is WalletSheet.NewInvoice -> NewInvoiceSheet(repository, sheet.assetId, onOpenSheet, onClose)
                 is WalletSheet.NewInvoiceResult -> InvoiceResultSheet(sheet, onClose)
                 is WalletSheet.Pay -> PaySheet(repository, sheet.prefill, onPaymentStarted, onClose)
@@ -312,6 +313,170 @@ private fun ReceiveSheet(repository: WalletRepository, assetSymbol: String?, ass
         } ?: run {
             error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall) }
                 ?: Text("Generating address…", color = Tokens.Dim, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+// ─────────────────────────── Faucet ───────────────────────────
+
+/** "1d 02:03:04" / "02:03:04" / "03:04" until [seconds] are up. */
+private fun formatCountdown(seconds: Long): String {
+    val s = seconds.coerceAtLeast(0)
+    val d = s / 86_400
+    val h = s % 86_400 / 3_600
+    val m = s % 3_600 / 60
+    val sec = s % 60
+    return when {
+        d > 0 -> String.format(java.util.Locale.US, "%dd %02d:%02d:%02d", d, h, m, sec)
+        h > 0 -> String.format(java.util.Locale.US, "%02d:%02d:%02d", h, m, sec)
+        else -> String.format(java.util.Locale.US, "%02d:%02d", m, sec)
+    }
+}
+
+/** "every 24h" / "every 30m" / "every 90s". */
+private fun formatInterval(seconds: ULong): String {
+    val s = seconds.toLong()
+    return when {
+        s > 0 && s % 86_400 == 0L -> "every ${s / 86_400}d"
+        s > 0 && s % 3_600 == 0L -> "every ${s / 3_600}h"
+        s > 0 && s % 60 == 0L -> "every ${s / 60}m"
+        else -> "every ${s}s"
+    }
+}
+
+/** The server's own message out of a gRPC error string, when there is one. */
+private fun grpcMessage(raw: String?): String {
+    val text = raw ?: "failed"
+    val m = Regex("message: \"([^\"]*)\"").find(text)
+    return m?.groupValues?.get(1)?.ifBlank { null } ?: text
+}
+
+@Composable
+private fun FaucetSheet(repository: WalletRepository, sheet: WalletSheet.Faucet, onClose: () -> Unit) {
+    val unit = DisplayUnit.from(repository.displayUnit)
+    val assets by repository.assets.collectAsState()
+    val scope = rememberCoroutineScope()
+    val asset = sheet.assetId ?: "lbtc"
+    var info by remember { mutableStateOf<app.light.wallet.core.FaucetInfo?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var claimed by remember { mutableStateOf<app.light.wallet.core.FaucetClaim?>(null) }
+    // Unix seconds, ticking once a second for the countdown.
+    var now by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis() / 1000
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
+    suspend fun load() {
+        runCatching { repository.getFaucet(asset) }
+            .onSuccess { info = it; loadError = null }
+            .onFailure { loadError = grpcMessage(it.message) }
+    }
+    androidx.compose.runtime.LaunchedEffect(asset) { load() }
+
+    fun amount(msat: ULong) = app.light.wallet.ui.formatAmountIn(msat, sheet.assetId, assets, unit)
+
+    SheetTitle("${sheet.symbol} faucet", onClose, badge = "testnet")
+    val f = info
+    when {
+        f == null -> Text(
+            loadError ?: "Loading faucet…",
+            color = if (loadError != null) Tokens.Red else Tokens.Dim,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        !f.enabled -> Text(
+            "There's no faucet for ${sheet.symbol} right now.",
+            color = Tokens.Dim, style = MaterialTheme.typography.bodyMedium,
+        )
+        else -> Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier.size(56.dp).background(Tokens.Accent.copy(alpha = .1f), androidx.compose.foundation.shape.CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.material3.Icon(app.light.wallet.ui.FaucetIcon, null, tint = Tokens.Accent, modifier = Modifier.size(26.dp))
+                }
+                Text(
+                    amount(f.amountMsat),
+                    style = MaterialTheme.typography.displaySmall.copy(fontSize = 30.sp),
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Text("per claim", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint)
+            }
+            KvPanel(
+                listOfNotNull(
+                    Triple("Faucet balance", f.balanceMsat?.let { amount(it) } ?: "—", false),
+                    Triple("Claims", if (f.unlimited) "unlimited for this node" else formatInterval(f.intervalSecs), false),
+                    Triple("Sent to", if (sheet.assetId != null) "asset wallet" else "main wallet", false),
+                ),
+            )
+            claimed?.let { c ->
+                Text("Sent ${amount(c.amountMsat)} ✓", style = MaterialTheme.typography.titleSmall, color = Tokens.Green)
+                Text(
+                    c.txid,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont, fontSize = 12.sp),
+                    color = Tokens.Dim,
+                )
+            }
+            error?.let { Text(it, color = Tokens.Red, style = MaterialTheme.typography.bodySmall) }
+            val waitSecs = if (f.unlimited || f.nextClaimAt == 0uL) 0L else f.nextClaimAt.toLong() - now
+            if (waitSecs > 0) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Tokens.Field, RoundedCornerShape(14.dp))
+                        .border(1.dp, Tokens.Border, RoundedCornerShape(14.dp))
+                        .padding(vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Next claim in", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp), color = Tokens.Faint)
+                    Text(
+                        formatCountdown(waitSecs),
+                        style = MaterialTheme.typography.titleLarge.copy(fontFamily = MonoFont),
+                        color = Tokens.TextMid, modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            } else {
+                // The faucet can't pay a full claim: nothing to press.
+                val tooLittle = f.balanceMsat?.let { it < f.amountMsat } ?: false
+                if (tooLittle) {
+                    Text(
+                        "The faucet has less than one claim left.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Tokens.Orange,
+                    )
+                }
+                PillButton(
+                    when {
+                        busy -> "Sending…"
+                        tooLittle -> "Not enough in the faucet"
+                        else -> "Get ${amount(f.amountMsat)}"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && !tooLittle,
+                ) {
+                    busy = true; error = null
+                    scope.launch {
+                        runCatching { repository.claimFaucet(asset) }
+                            .onSuccess { c ->
+                                claimed = c
+                                info = f.copy(nextClaimAt = c.nextClaimAt)
+                                load() // fresh faucet balance
+                            }
+                            .onFailure {
+                                error = grpcMessage(it.message)
+                                load() // e.g. already claimed elsewhere: show the countdown
+                            }
+                        busy = false
+                    }
+                }
+            }
         }
     }
 }

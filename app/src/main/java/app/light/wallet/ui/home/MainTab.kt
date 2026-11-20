@@ -286,6 +286,7 @@ fun MainTab(
                             worth = null,
                             onReceive = { onOpenSheet(WalletSheet.Receive()) },
                             onSend = { onOpenSheet(WalletSheet.SendChain) },
+                            onFaucet = { onOpenSheet(WalletSheet.Faucet(null, "L-BTC")) },
                         )
                         LightningCard(
                             title = "Lightning",
@@ -348,6 +349,7 @@ fun MainTab(
                             // wallet), not CLN's - see WalletSheet.Receive.
                             onReceive = { onOpenSheet(WalletSheet.Receive(symbol, assetId)) },
                             onSend = { onOpenSheet(WalletSheet.SendAsset(assetId, symbol)) },
+                            onFaucet = { onOpenSheet(WalletSheet.Faucet(assetId, symbol)) },
                             assetId = assetId,
                             feeBalance = "${formatAmount(assetWalletLbtc, unit)} ${unit.label}",
                             feeBalanceEmpty = (assetWalletLbtc ?: 0uL) == 0uL,
@@ -501,6 +503,8 @@ private fun OnchainCard(
     worth: String?,
     onReceive: () -> Unit,
     onSend: (() -> Unit)?,
+    /** Opens this asset's testnet faucet. */
+    onFaucet: () -> Unit,
     amountColor: Color = Tokens.Text,
     priceLine: String? = null,
     assetId: String? = null,
@@ -597,6 +601,15 @@ private fun OnchainCard(
             SoftPillButton("Receive", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowDownward, onClick = onReceive)
             if (onSend != null) {
                 SoftPillButton("Send", modifier = Modifier.weight(1f), icon = Icons.Filled.ArrowUpward, onClick = onSend)
+            }
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(Color(0x0FFFFFFF), CircleShape)
+                    .noRipple(onClick = onFaucet),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(app.light.wallet.ui.FaucetIcon, "Faucet", tint = Tokens.TextMid, modifier = Modifier.size(18.dp))
             }
         }
     }

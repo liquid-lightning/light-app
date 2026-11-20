@@ -15,6 +15,8 @@ sealed interface WalletSheet {
     data object SendChain : WalletSheet                     // on-chain withdraw
     /** On-chain send of an issued asset from the asset wallet. */
     data class SendAsset(val assetId: String, val symbol: String) : WalletSheet
+    /** The testnet faucet for an asset ([assetId] null = L-BTC). */
+    data class Faucet(val assetId: String?, val symbol: String) : WalletSheet
     /** Move L-BTC from CLN's wallet into the asset wallet, to pay asset fees. */
     data object TopUpAssetWallet : WalletSheet
     /** Invoice creation; [assetId] preselects an issued asset (null = L-BTC). */

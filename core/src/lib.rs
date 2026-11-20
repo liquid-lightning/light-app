@@ -502,6 +502,30 @@ impl LightNode {
         })
     }
 
+    /// The testnet faucet for `asset` ("lbtc" or an issued asset id).
+    pub async fn get_faucet(&self, asset: String) -> CoreResult<FaucetInfo> {
+        let f = self.ember.assets().faucet(&asset).await.map_err(rpc_err)?;
+        Ok(FaucetInfo {
+            enabled: f.enabled,
+            amount_msat: f.amount_msat,
+            balance_msat: f.balance_msat,
+            interval_secs: f.interval_secs,
+            next_claim_at: f.next_claim_at,
+            unlimited: f.unlimited,
+        })
+    }
+
+    /// Claims `asset` from the testnet faucet into this node.
+    pub async fn claim_faucet(&self, asset: String) -> CoreResult<FaucetClaim> {
+        let c = self.ember.assets().claim_faucet(&asset).await.map_err(rpc_err)?;
+        Ok(FaucetClaim {
+            txid: c.txid,
+            amount_msat: c.amount_msat,
+            address: c.address,
+            next_claim_at: c.next_claim_at,
+        })
+    }
+
     /// Transaction history of this node's on-chain asset wallet: per tx
     /// the net change per asset - merged into the Transactions page.
     pub async fn list_asset_transactions(&self) -> CoreResult<Vec<AssetWalletTx>> {

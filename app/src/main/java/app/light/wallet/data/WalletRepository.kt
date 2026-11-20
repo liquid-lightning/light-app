@@ -546,6 +546,15 @@ class WalletRepository(
     /** A fresh asset-wallet address: receives any issued asset, and L-BTC sent here tops up its fee balance. */
     suspend fun newAssetAddress(): String = requireNode().newAssetAddress()
 
+    /** The testnet faucet for [asset] ("lbtc" or an issued asset id). */
+    suspend fun getFaucet(asset: String): app.light.wallet.core.FaucetInfo = requireNode().getFaucet(asset)
+
+    /** Claims [asset] from the testnet faucet into this node. */
+    suspend fun claimFaucet(asset: String): app.light.wallet.core.FaucetClaim =
+        requireNode().claimFaucet(asset).also {
+            refreshFunds(); refreshAssetBalances(); refreshTransactions()
+        }
+
     /** Sends [amountMsat] (1000 msat per asset base unit) of [asset] on-chain; returns the txid. */
     suspend fun sendAsset(address: String, asset: String, amountMsat: ULong): String =
         requireNode().sendAsset(address, asset, amountMsat).also { refreshAssetBalances() }

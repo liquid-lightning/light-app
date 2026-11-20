@@ -901,11 +901,16 @@ private fun AssetInvoicePaySection(repository: WalletRepository, wrapped: String
     val invoice = remember(wrapped) { decodeAssetInvoiceWrapper(wrapped) }
     // The swap price comes from ember's price pairs (every node's
     // pricetiers-plugin polls the same table), so this node's own quote is
-    // what the swap provider will accept too.
+    // what the swap provider will accept too. Several assets can pay for the
+    // same invoice asset, each its own pair: re-quote for the chosen "Pay
+    // with" asset (Automatic / the invoice's own asset: the first pair).
+    val quoteFrom = fromAsset?.id?.takeIf { it != invoice?.asset }
     var quote by remember(wrapped) { mutableStateOf<app.light.wallet.core.AssetQuote?>(null) }
     var quoteError by remember(wrapped) { mutableStateOf<String?>(null) }
-    androidx.compose.runtime.LaunchedEffect(wrapped) {
-        runCatching { repository.quoteAssetInvoice(wrapped) }
+    androidx.compose.runtime.LaunchedEffect(wrapped, quoteFrom) {
+        quote = null
+        quoteError = null
+        runCatching { repository.quoteAssetInvoice(wrapped, quoteFrom) }
             .onSuccess { quote = it }
             .onFailure { quoteError = it.message ?: "no price available" }
     }
@@ -987,6 +992,31 @@ private fun decodeAssetInvoiceWrapper(wrapped: String): AssetInvoiceInfo? = runC
 }.getOrNull()
 
 /**
+ * Wraps a plain bolt11 as an L-BTC asset invoice on the payer's side, so
+ * payassetinvoice can pay it with an issued asset via the swap service.
+ * The wrapper is unsigned metadata (assetswap-plugin's
+ * `AssetInvoiceWrapper`): only `bolt11` is actually paid, so the payee
+ * needn't have made it. Null for anything but a fixed-amount bolt11 - a
+ * swap must be priced up front.
+ */
+private fun wrapLbtcInvoice(bolt11: String, d: DecodedInvoice): String? {
+    if (d.itemType != "bolt11_invoice" || !d.valid) return null
+    val amountMsat = d.amountMsat ?: return null
+    val paymentHash = d.paymentHash ?: return null
+    val json = org.json.JSONObject()
+        .put("v", 1)
+        .put("bolt11", bolt11)
+        .put("payment_hash", paymentHash)
+        .put("asset", "lbtc")
+        .put("amount_msat", amountMsat.toLong())
+        .toString()
+    return android.util.Base64.encodeToString(
+        json.toByteArray(Charsets.UTF_8),
+        android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+    )
+}
+
+/**
  * Leg-1 routing-fee budget payassetinvoice allows on top of the swap amount
  * (assetswap-plugin pay.rs: `maxfee_msat = from_amount_msat / 100`).
  */
@@ -1046,7 +1076,7 @@ private fun AssetPayPreview(
 
     Column(Modifier.fillMaxWidth().padding(top = 14.dp)) {
         Row2("Invoice", formatAssetAmount(invoice.amountMsat, invoice.asset, toSym))
-        if (quote != null && invoice.asset != "lbtc") {
+        if (quote != null && quote.fromAsset != invoice.asset) {
             val fromSym = symbolOf(quote.fromAsset)
             val fee = if (quote.feeBaseMsat > 0uL) " + ${formatAssetAmount(quote.feeBaseMsat, quote.fromAsset, fromSym)} fee" else ""
             val fromPrecision = if (quote.fromAsset == "lbtc") 0 else precisionOf(quote.fromAsset)
@@ -1112,6 +1142,10 @@ private fun PaySheet(repository: WalletRepository, prefill: String, onPaymentSta
     var error by remember { mutableStateOf<String?>(null) }
     var decodeError by remember { mutableStateOf<String?>(null) }
     var decoding by remember { mutableStateOf(false) }
+    // Pay a plain L-BTC bolt11 through the asset-swap flow instead of xpay,
+    // for a payer who holds only an issued asset (see wrapLbtcInvoice).
+    var payWithAsset by remember { mutableStateOf(false) }
+    val availableAssets by repository.assets.collectAsState()
 
     // A real bolt11/offer always starts with "ln" (BOLT11/12's own
     // human-readable prefix); an asset invoice is a base64 wrapper string
@@ -1127,6 +1161,7 @@ private fun PaySheet(repository: WalletRepository, prefill: String, onPaymentSta
         decodeError = null
         amountOverride = ""
         decoding = false
+        payWithAsset = false
         if (trimmed.length > 20 && !isAssetInvoice) {
             decoding = true
             kotlinx.coroutines.delay(350) // debounce while pasting/typing
@@ -1178,6 +1213,29 @@ private fun PaySheet(repository: WalletRepository, prefill: String, onPaymentSta
             FieldLabel("Amount to pay (${unit.label})", topPadding = 12)
             DesignField(amountOverride, { amountOverride = filterAmountInput(it, unit) }, "0", numeric = true, big = true)
         }
+    }
+
+    // Paying this L-BTC invoice with an issued asset (via the swap service):
+    // offered once there's an issued asset to pay with at all.
+    val hasIssuedAssets = availableAssets.orEmpty().any { it.id != "lbtc" }
+    val lbtcWrapper = decoded?.let { wrapLbtcInvoice(inv.trim(), it) }
+    if (decoded != null && hasIssuedAssets) {
+        FieldLabel("Pay with", topPadding = 12)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssetPill("L-BTC", !payWithAsset) { payWithAsset = false }
+            AssetPill("Another asset (swap)", payWithAsset) { if (lbtcWrapper != null) payWithAsset = true }
+        }
+        if (lbtcWrapper == null) {
+            Text(
+                "Paying with another asset needs a BOLT11 invoice with a fixed amount.",
+                style = MaterialTheme.typography.bodySmall, color = Tokens.Faint,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
+    if (payWithAsset && lbtcWrapper != null) {
+        AssetInvoicePaySection(repository, lbtcWrapper, onClose)
+        return
     }
 
     Text(

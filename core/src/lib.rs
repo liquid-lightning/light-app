@@ -435,12 +435,18 @@ impl LightNode {
     /// swap provider's live/binding decision (made only once a payment is
     /// actually attempted). Only returns real numbers if this node
     /// happens to carry matching pricing config of its own; otherwise
-    /// fails the same way an unsupported pair would.
-    pub async fn quote_asset_invoice(&self, wrapped: String) -> CoreResult<AssetQuote> {
+    /// fails the same way an unsupported pair would. `from_asset` prices
+    /// paying in that asset ("lbtc" or an issued asset id); `None` takes
+    /// the first pair configured for the invoice's asset.
+    pub async fn quote_asset_invoice(
+        &self,
+        wrapped: String,
+        from_asset: Option<String>,
+    ) -> CoreResult<AssetQuote> {
         let r = self
             .ember
             .assets()
-            .quote_invoice(wrapped)
+            .quote_invoice(wrapped, from_asset)
             .await
             .map_err(rpc_err)?;
         Ok(AssetQuote {

@@ -525,8 +525,9 @@ class WalletRepository(
         requireNode().createAssetInvoice(asset, amountMsat, label, description).also { refreshInvoices() }
 
     /** Estimate only - see `LightNode.quoteAssetInvoice`'s own doc comment. */
-    suspend fun quoteAssetInvoice(wrapped: String): AssetQuote =
-        requireNode().quoteAssetInvoice(wrapped)
+    /** [fromAsset]: price paying in that asset; null = the first pair for the invoice's asset. */
+    suspend fun quoteAssetInvoice(wrapped: String, fromAsset: String? = null): AssetQuote =
+        requireNode().quoteAssetInvoice(wrapped, fromAsset)
 
     suspend fun payAssetInvoice(
         wrapped: String,

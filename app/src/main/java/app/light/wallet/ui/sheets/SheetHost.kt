@@ -1502,6 +1502,7 @@ private fun OpenChannelSheet(
     var result by remember { mutableStateOf<String?>(null) }
     // null = an ordinary L-BTC channel (fundchannel from CLN's wallet);
     // else an asset channel funded from the asset wallet (assetchan-open).
+    // Either way dual-funded: the swap service matches the amount.
     var assetId by remember { mutableStateOf(initialAssetId) }
 
     // Channels are opened only with the swap service - there is no
@@ -1556,7 +1557,9 @@ private fun OpenChannelSheet(
             when {
                 !swapServiceLoaded -> "Loading swap service…"
                 swapService == null -> "Swap service is not configured server-side, so a channel can't be opened."
-                else -> "A direct channel can only be opened with the swap service."
+                else -> "A direct channel can only be opened with the swap service. " +
+                    "It puts in as much as you do, so the channel holds twice your amount " +
+                    "and you can receive right away."
             },
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
             color = if (swapServiceLoaded && swapService == null) Tokens.Red else Tokens.Faint,
@@ -1650,7 +1653,7 @@ private fun OpenChannelSheet(
         }
     }
     Text(
-        if (assetId != null) "connect → assetchan-open" else "connect → fundchannel",
+        if (assetId != null) "connect → assetchan-open (dual-funded)" else "connect → fundchannel (dual-funded)",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
         color = Tokens.Faint,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,

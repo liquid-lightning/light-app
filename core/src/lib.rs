@@ -594,6 +594,8 @@ impl LightNode {
     /// Opens a channel in `asset` to the already-connected `peer_id`,
     /// funded from the asset wallet (`fee_reserve_sat`: L-BTC put beside
     /// the asset for the channel's on-chain fees; `None` = node default).
+    /// Always dual-funded (open_channel2): channels are only ever opened
+    /// with the swap service, which puts in as much of the asset as we do.
     pub async fn open_asset_channel(
         &self,
         peer_id: String,
@@ -605,7 +607,7 @@ impl LightNode {
         let r = self
             .ember
             .assets()
-            .open_channel(peer_id, asset, amount_msat, fee_reserve_sat, announce)
+            .open_channel(peer_id, asset, amount_msat, fee_reserve_sat, announce, true)
             .await
             .map_err(rpc_err)?;
         Ok(OpenAssetChannelResult {
